@@ -1,23 +1,20 @@
+use std::io::Write as _;
+
 use anyhow::Result;
 
 use crate::cli::{Format, ObjArgs};
-use crate::target::Target;
+use crate::ctx::Ctx;
 
-pub fn run(args: ObjArgs) -> Result<()> {
-    let target = Target::detect(&args.path)?;
+pub fn run(ctx: &Ctx, args: ObjArgs) -> Result<()> {
+    let file = ctx.load()?;
+    let object = file.object_at::<serde_json::Value>(args.path_id)?;
+    let value = object.read()?;
 
-    match target {
-        Target::SerializedFile(path) | Target::Bundle(path) => {
-            // TODO: locate object `args.path_id`, read it via its typetree, then emit.
-            match args.format {
-                Format::Json => {
-                    // TODO: serde_json over the typetree value, pretty-printed.
-                    println!("{{ /* obj {} from {} */ }}", args.path_id, path.display());
-                }
-            }
-        }
-        Target::GameDir(_) => {
-            anyhow::bail!("`obj` expects a file or bundle, not a game directory");
+    match args.format {
+        Format::Json => {
+            let mut out = std::io::stdout().lock();
+            serde_json::to_writer_pretty(&mut out, &value)?;
+            writeln!(out)?;
         }
     }
 

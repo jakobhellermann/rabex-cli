@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -18,6 +18,17 @@ pub enum Command {
     Ls(LsArgs),
     /// Dump a single object by its path id.
     Obj(ObjArgs),
+}
+
+impl Command {
+    /// The target path, common to every subcommand.
+    pub fn path(&self) -> &Path {
+        match self {
+            Command::Info(a) => &a.path,
+            Command::Ls(a) => &a.path,
+            Command::Obj(a) => &a.path,
+        }
+    }
 }
 
 #[derive(Args)]

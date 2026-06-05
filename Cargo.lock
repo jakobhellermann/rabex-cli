@@ -546,6 +546,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "rabex-env",
+ "serde_json",
 ]
 
 [[package]]

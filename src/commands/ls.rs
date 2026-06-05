@@ -1,21 +1,19 @@
 use anyhow::Result;
 
 use crate::cli::LsArgs;
-use crate::target::Target;
+use crate::ctx::Ctx;
 
-pub fn run(args: LsArgs) -> Result<()> {
-    let target = Target::detect(&args.path)?;
+pub fn run(ctx: &Ctx, args: LsArgs) -> Result<()> {
+    let file = ctx.load()?;
 
-    match target {
-        Target::SerializedFile(path) | Target::Bundle(path) => {
-            // TODO: iterate objects, print `<path_id>  <ClassId>  <name?>`,
-            //       filtered by `args.r#type` if given.
-            let _ = &args.r#type;
-            println!("ls: {}", path.display());
+    for obj in file.objects::<()>() {
+        let class_id = obj.class_id();
+        if let Some(filter) = &args.r#type
+            && format!("{class_id:?}") != *filter
+        {
+            continue;
         }
-        Target::GameDir(_) => {
-            anyhow::bail!("`ls` expects a file or bundle, not a game directory");
-        }
+        println!("{:>12}  {:?}", obj.path_id(), class_id);
     }
 
     Ok(())
