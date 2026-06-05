@@ -1,4 +1,5 @@
 mod cli;
+mod complete;
 mod ctx;
 mod target;
 mod commands {

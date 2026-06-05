@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::ArgValueCandidates;
 
 /// Inspect Unity serialized files, asset bundles and game directories.
 #[derive(Parser)]
@@ -58,8 +59,7 @@ pub struct ObjArgs {
     pub path: PathBuf,
 
     /// The path id of the object to dump.
-    //
-    // TODO: dynamic completion from the path ids actually present in `path`.
+    #[arg(add = ArgValueCandidates::new(|| crate::complete::path_ids().unwrap_or_default()))]
     pub path_id: i64,
 
     /// Output format.
