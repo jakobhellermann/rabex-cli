@@ -1,7 +1,6 @@
-use std::io::{Cursor, Write};
+use std::io::Write;
 
 use anyhow::Result;
-use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
 use rabex_env::rabex::files::unityfile::FileEntry;
 use rabex_env::resolver::EnvResolver as _;
 
@@ -13,8 +12,8 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     let mut out = stdout.lock();
 
     match &ctx.target {
-        Target::SerializedFile(_) => serialized_file_info(ctx, &mut out),
-        Target::Bundle(path) => bundle_info(ctx, path, &mut out),
+        Target::SerializedFile { .. } => serialized_file_info(ctx, &mut out),
+        Target::Bundle { .. } => bundle_info(ctx, &mut out),
         Target::GameDir(_) => game_info(ctx, &mut out),
     }
 }
@@ -44,15 +43,8 @@ fn serialized_file_info(ctx: &Ctx, out: &mut impl Write) -> Result<()> {
 }
 
 /// List the files contained in an asset bundle.
-fn bundle_info(ctx: &Ctx, path: &std::path::Path, out: &mut impl Write) -> Result<()> {
-    let data = std::fs::read(path)?;
-    // Bundles often omit their unity version; fall back to the surrounding
-    // game's version so the reader can decode the directory.
-    let mut config = ExtractionConfig::default();
-    if let Ok(version) = ctx.env().unity_version() {
-        config = config.with_fallback_unity_version(version.clone());
-    }
-    let bundle = BundleFileReader::from_reader(Cursor::new(data), &config)?;
+fn bundle_info(ctx: &Ctx, out: &mut impl Write) -> Result<()> {
+    let bundle = ctx.open_bundle()?;
 
     let entries = bundle.files();
     writeln!(out, "bundle ({} files)", entries.len())?;

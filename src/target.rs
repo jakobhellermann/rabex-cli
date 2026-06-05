@@ -1,65 +1,56 @@
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Result, bail};
 
-/// What a given path actually is, decided by inspecting it.
+use crate::cli::TargetArgs;
+use crate::locate::locate_steam_game;
+
+/// What the user asked to inspect, resolved from [`TargetArgs`].
 #[derive(Debug)]
 pub enum Target {
-    /// A standalone Unity serialized file (globalgamemanagers, level0, sharedassets, …).
-    SerializedFile(PathBuf),
-    /// A UnityFS asset bundle (possibly containing several serialized files).
-    Bundle(PathBuf),
-    /// A game directory (`*_Data`, or a dir we can `GameFiles::probe`).
+    /// A whole game directory (no file/bundle selected).
     GameDir(PathBuf),
+    /// A serialized file, with an optional surrounding game directory.
+    SerializedFile {
+        game_dir: Option<PathBuf>,
+        path: PathBuf,
+    },
+    /// An asset bundle, with an optional surrounding game directory.
+    Bundle {
+        game_dir: Option<PathBuf>,
+        path: PathBuf,
+    },
 }
 
 impl Target {
-    /// Auto-detect what `path` is, by metadata + magic bytes.
-    pub fn detect(path: &Path) -> Result<Target> {
-        let meta =
-            std::fs::metadata(path).with_context(|| format!("cannot stat {}", path.display()))?;
+    /// Resolve the target-selection flags into a concrete target.
+    ///
+    /// The `--steam-game`/`--game-dir` and `--file`/`--bundle` exclusivity is
+    /// enforced by clap (`conflicts_with`), so those pairs can't both be set
+    /// here.
+    pub fn resolve(args: &TargetArgs) -> Result<Target> {
+        // The game context, if any.
+        let game_dir = match (&args.steam_game, &args.game_dir) {
+            (Some(name), _) => Some(locate_steam_game(name)?),
+            (None, Some(dir)) => Some(dir.clone()),
+            (None, None) => None,
+        };
 
-        if meta.is_dir() {
-            // TODO: distinguish a real game dir from "a dir full of bundles".
-            return Ok(Target::GameDir(path.to_path_buf()));
+        match (&args.file, &args.bundle) {
+            (Some(file), _) => Ok(Target::SerializedFile {
+                game_dir,
+                path: file.clone(),
+            }),
+            (None, Some(bundle)) => Ok(Target::Bundle {
+                game_dir,
+                path: bundle.clone(),
+            }),
+            (None, None) => match game_dir {
+                Some(dir) => Ok(Target::GameDir(dir)),
+                None => {
+                    bail!("no target given; use --steam-game/--game-dir, and/or --file/--bundle")
+                }
+            },
         }
-
-        if is_bundle(path)? {
-            Ok(Target::Bundle(path.to_path_buf()))
-        } else {
-            // TODO: could still verify it parses as a SerializedFile and error early otherwise.
-            Ok(Target::SerializedFile(path.to_path_buf()))
-        }
-    }
-}
-
-/// UnityFS bundles start with the ASCII magic `UnityFS`.
-fn is_bundle(path: &Path) -> Result<bool> {
-    let mut f = std::fs::File::open(path)?;
-    let mut magic = [0u8; 7];
-    match f.read_exact(&mut magic) {
-        Ok(()) => Ok(looks_like_bundle(&magic)),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Whether `header` (the first bytes of a file) is a UnityFS bundle magic.
-fn looks_like_bundle(header: &[u8]) -> bool {
-    header.starts_with(b"UnityFS")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::looks_like_bundle;
-
-    #[test]
-    fn bundle_magic_detection() {
-        assert!(looks_like_bundle(b"UnityFS\0\0\0"));
-        assert!(!looks_like_bundle(b"\x00\x00\x00\x00not a bundle"));
-        // A serialized file does not start with the bundle magic.
-        assert!(!looks_like_bundle(b"Unity"));
-        assert!(!looks_like_bundle(b""));
     }
 }

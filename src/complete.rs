@@ -1,25 +1,25 @@
 //! Dynamic shell completion helpers.
 //!
 //! `clap_complete` doesn't hand parsed arguments to a completer, so — like jj
-//! does — we re-parse `std::env::args_os()` ourselves to recover the `<path>`
-//! the user already typed, load it, and offer its path ids as candidates.
+//! does — we re-parse `std::env::args_os()` ourselves to recover the target
+//! flags the user already typed, then offer context-aware candidates.
 
-use std::path::PathBuf;
-
-use anyhow::{Context as _, Result};
-use clap::CommandFactory as _;
+use anyhow::Result;
+use clap::{CommandFactory as _, FromArgMatches as _};
 use clap_complete::CompletionCandidate;
+use rabex_env::resolver::EnvResolver as _;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, TargetArgs};
 use crate::ctx::Ctx;
+use crate::locate::find_unity_data_dir;
 
-/// Recover the `<path>` argument of the subcommand currently being completed.
+/// Recover the target-selection flags of the subcommand being completed.
 ///
-/// We read it straight out of `ArgMatches` rather than going through
+/// Reads them out of `ArgMatches` per-field rather than via
 /// `Cli::from_arg_matches`, because the latter also parses the (in-progress)
-/// `path_id` into an `i64` — which fails on an empty or partial value and would
-/// abort completion exactly when the user is at the `path_id` slot.
-fn current_path() -> Result<PathBuf> {
+/// `path_id` into an `i64` — which fails on an empty/partial value and would
+/// abort completion exactly when the user is mid-argument.
+fn current_target() -> Result<TargetArgs> {
     // The clap_complete prelude is `<bin> -- <bin> <actual args...>`, so skip 2.
     let args = std::env::args_os().skip(2);
 
@@ -29,21 +29,14 @@ fn current_path() -> Result<PathBuf> {
         .ignore_errors(true)
         .try_get_matches_from(args)?;
 
-    let (_subcommand, sub_matches) = matches.subcommand().context("no subcommand")?;
-    let path = sub_matches
-        .get_one::<PathBuf>("path")
-        .context("no `path` argument yet")?;
-    Ok(path.clone())
+    // Target flags live on the top-level command, before the subcommand.
+    Ok(TargetArgs::from_arg_matches(&matches)?)
 }
 
-/// Candidates for an object path id: every path id present in the target file,
-/// labelled with its class id. Clap filters these against the typed prefix.
-///
-/// Returns a `Result`; the caller decides how to map failures (e.g. to an empty
-/// candidate list).
+/// Candidates for an object path id: every path id in the target file, labelled
+/// with its class id. Clap filters these against the typed prefix.
 pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
-    let path = current_path()?;
-    let ctx = Ctx::new(&path)?;
+    let ctx = Ctx::new(&current_target()?)?;
     let file = ctx.load()?;
 
     let candidates = file
@@ -54,4 +47,66 @@ pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
         })
         .collect();
     Ok(candidates)
+}
+
+/// Candidates for `--file`/`--bundle` when a game context is set: the serialized
+/// files of that game. Without a game context there's nothing to enumerate, so
+/// the shell falls back to plain path completion.
+pub fn game_files() -> Result<Vec<CompletionCandidate>> {
+    let target = current_target()?;
+
+    // Only meaningful with a game context; resolve it the same way Target does.
+    let game_dir = match (&target.steam_game, &target.game_dir) {
+        (Some(name), None) => crate::locate::locate_steam_game(name)?,
+        (None, Some(dir)) => dir.clone(),
+        _ => return Ok(Vec::new()),
+    };
+
+    let env = rabex_env::Environment::new_in(
+        &game_dir,
+        rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache::new(
+            rabex_env::rabex::tpk::TpkTypeTreeBlob::embedded(),
+        ),
+    )?;
+
+    let candidates = env
+        .game_files
+        .serialized_files()?
+        .into_iter()
+        .map(|p| CompletionCandidate::new(p.to_string_lossy().into_owned()))
+        .collect();
+    Ok(candidates)
+}
+
+/// Candidates for `--steam-game`: installed steam games that look like unity
+/// games, with their app id as help text.
+///
+/// Note: completing *in the middle* of a quoted spaced name doesn't work in
+/// fish. `commandline --current-token` hands clap the token *with* its opening
+/// quote (e.g. `'Hollow Knigh`), and clap prefix-matches that literal against
+/// the candidates — which start with no quote — so nothing matches. There's no
+/// fish flag to get the token unquoted (fish-shell#10875). Completing at the
+/// end of the token works fine. A code fix would mean switching to
+/// `ArgValueCompleter` and stripping quotes from the token before filtering
+/// ourselves.
+pub fn steam_games() -> Vec<CompletionCandidate> {
+    fn inner() -> Result<Vec<CompletionCandidate>> {
+        let steam = steamlocate::SteamDir::locate()?;
+        let mut candidates = Vec::new();
+
+        for library in steam.libraries()?.filter_map(Result::ok) {
+            for app in library.apps().filter_map(Result::ok) {
+                let app_dir = library.resolve_app_dir(&app);
+                if find_unity_data_dir(&app_dir).ok().flatten().is_none() {
+                    continue;
+                }
+                let name = app.name.clone().unwrap_or_else(|| app.install_dir.clone());
+                candidates
+                    .push(CompletionCandidate::new(name).help(Some(app.app_id.to_string().into())));
+            }
+        }
+        Ok(candidates)
+    }
+
+    inner().unwrap_or_default()
 }

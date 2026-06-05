@@ -8,5 +8,5 @@ fn main() -> Result<()> {
     CompleteEnv::with_factory(Cli::command).complete();
 
     let cli = Cli::parse();
-    rabex_cli::run(cli.command)
+    rabex_cli::run(cli)
 }

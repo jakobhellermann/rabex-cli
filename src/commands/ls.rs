@@ -7,11 +7,26 @@ use rabex_env::resolver::EnvResolver;
 
 use crate::cli::LsArgs;
 use crate::ctx::Ctx;
+use crate::target::Target;
 
 pub fn run(ctx: &Ctx, args: LsArgs) -> Result<()> {
-    let file = ctx.load()?;
     let stdout = std::io::stdout();
-    list(&file, args.r#type.as_deref(), &mut stdout.lock())
+    let mut out = stdout.lock();
+
+    // On a whole game, `ls` lists the game's serialized files; on a file or
+    // bundle it lists the contained objects.
+    match &ctx.target {
+        Target::GameDir(_) => {
+            for path in ctx.env().game_files.serialized_files()? {
+                writeln!(out, "{}", path.display())?;
+            }
+            Ok(())
+        }
+        _ => {
+            let file = ctx.load()?;
+            list(&file, args.r#type.as_deref(), &mut out)
+        }
+    }
 }
 
 /// Write `path_id  ClassId` for each object, optionally filtered to a single

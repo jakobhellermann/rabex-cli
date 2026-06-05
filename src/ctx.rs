@@ -12,21 +12,23 @@ use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::EnvResolver as _;
 
+use crate::cli::TargetArgs;
 use crate::target::Target;
 
-/// Shared state handed to every command: the detected target plus an
-/// `Environment` rooted at the game the target belongs to.
+/// Shared state handed to every command: the resolved target plus an
+/// `Environment` rooted at the relevant game (or, for a standalone target, at
+/// the file's own directory).
 pub struct Ctx {
     pub target: Target,
     env: Environment,
-    /// The target path made relative to `env.game_files.game_dir`, for
-    /// loading file/bundle targets. `None` for a `GameDir` target.
+    /// Path of the file/bundle relative to the env root. `None` for a `GameDir`
+    /// target.
     relative: Option<PathBuf>,
 }
 
 impl Ctx {
-    pub fn new(path: &Path) -> Result<Ctx> {
-        let target = Target::detect(path)?;
+    pub fn new(args: &TargetArgs) -> Result<Ctx> {
+        let target = Target::resolve(args)?;
         let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
 
         match &target {
@@ -39,9 +41,21 @@ impl Ctx {
                     relative: None,
                 })
             }
-            Target::SerializedFile(file) | Target::Bundle(file) => {
-                let (env, game_dir) = env_for_file(file, tpk)?;
-                let relative = file.strip_prefix(&game_dir).unwrap_or(file).to_path_buf();
+            Target::SerializedFile { game_dir, path } | Target::Bundle { game_dir, path } => {
+                let (env, relative) = match game_dir {
+                    // File/bundle is relative to an explicit game directory.
+                    Some(dir) => {
+                        let env = Environment::new_in(dir, tpk)
+                            .with_context(|| format!("not a unity game dir: {}", dir.display()))?;
+                        (env, path.clone())
+                    }
+                    // Standalone: root the env at (or above) the file itself.
+                    None => {
+                        let (env, root) = env_for_file(path, tpk)?;
+                        let relative = path.strip_prefix(&root).unwrap_or(path).to_path_buf();
+                        (env, relative)
+                    }
+                };
                 Ok(Ctx {
                     target,
                     env,
@@ -64,20 +78,28 @@ impl Ctx {
         };
 
         match &self.target {
-            Target::SerializedFile(_) => self.env.load_serialized(relative),
-            Target::Bundle(_) => self.load_bundle(relative),
+            Target::SerializedFile { .. } => self.env.load_serialized(relative),
+            Target::Bundle { .. } => self.load_bundle(relative),
             Target::GameDir(_) => unreachable!("game dir target has no relative path"),
         }
     }
 
-    /// Load the main serialized file out of a bundle at a *raw* relative path.
+    /// Open the bundle target's `BundleFileReader` (e.g. to list its entries).
+    /// Bails unless the target is a bundle.
+    pub fn open_bundle(&self) -> Result<BundleFileReader<Cursor<Data>>> {
+        let relative = match &self.target {
+            Target::Bundle { .. } => self.relative.as_ref().expect("bundle target has a path"),
+            _ => bail!("expected a bundle"),
+        };
+        self.bundle_reader(relative)
+    }
+
+    /// Open a bundle at a *raw* relative path through the env resolver.
     ///
-    /// `Environment::load_addressables_bundle_content` joins the addressables
-    /// build folder onto the path, which only works for bundles inside a game's
-    /// `aa/` tree. This reads the bundle directly so a standalone `.bundle`
-    /// works too. Mirrors `load_addressables_bundle_content_leaf`, minus the
-    /// aa-build join.
-    fn load_bundle(&self, relative: &Path) -> Result<SerializedFileHandle<'_>> {
+    /// `Environment::load_addressables_bundle` joins the addressables build
+    /// folder onto the path, which only works for bundles inside a game's `aa/`
+    /// tree. This reads the bundle directly so a standalone `.bundle` works too.
+    fn bundle_reader(&self, relative: &Path) -> Result<BundleFileReader<Cursor<Data>>> {
         let data = self
             .env
             .game_files
@@ -90,8 +112,13 @@ impl Ctx {
         if let Ok(version) = self.env.unity_version() {
             config = config.with_fallback_unity_version(version.clone());
         }
-        let bundle = BundleFileReader::from_reader(Cursor::new(data), &config)
-            .with_context(|| format!("open bundle {}", relative.display()))?;
+        BundleFileReader::from_reader(Cursor::new(data), &config)
+            .with_context(|| format!("open bundle {}", relative.display()))
+    }
+
+    /// Load the main serialized file out of a bundle at a relative path.
+    fn load_bundle(&self, relative: &Path) -> Result<SerializedFileHandle<'_>> {
+        let bundle = self.bundle_reader(relative)?;
 
         let entry = bundle
             .main_serializedfile()

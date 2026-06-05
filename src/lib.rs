@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod complete;
 pub mod ctx;
+pub mod locate;
 pub mod target;
 pub mod commands {
     pub mod info;
@@ -10,16 +11,16 @@ pub mod commands {
 
 use anyhow::Result;
 
-use crate::cli::Command;
+use crate::cli::Cli;
 use crate::ctx::Ctx;
 
-/// Run a parsed command. The binary's `main` is a thin wrapper around this.
-pub fn run(command: Command) -> Result<()> {
-    let ctx = Ctx::new(command.path())?;
+/// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
+pub fn run(cli: Cli) -> Result<()> {
+    let ctx = Ctx::new(&cli.target)?;
 
-    match command {
-        Command::Info(_) => commands::info::run(&ctx),
-        Command::Ls(args) => commands::ls::run(&ctx, args),
-        Command::Obj(args) => commands::obj::run(&ctx, args),
+    match cli.command {
+        cli::Command::Info => commands::info::run(&ctx),
+        cli::Command::Ls(args) => commands::ls::run(&ctx, args),
+        cli::Command::Obj(args) => commands::obj::run(&ctx, args),
     }
 }
