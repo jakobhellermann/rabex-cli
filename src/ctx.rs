@@ -9,8 +9,8 @@ use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 
 use crate::target::Target;
 
-/// Shared state handed to every command: the detected target plus a lazily
-/// constructed `Environment` rooted at the game the target belongs to.
+/// Shared state handed to every command: the detected target plus an
+/// `Environment` rooted at the game the target belongs to.
 pub struct Ctx {
     pub target: Target,
     env: Environment,
@@ -48,24 +48,23 @@ impl Ctx {
 
     /// Load the target as a serialized file (file or bundle). Bails on a game dir.
     pub fn load(&self) -> Result<SerializedFileHandle<'_>> {
-        let relative = match &self.target {
-            Target::GameDir(_) => bail!("expected a file or bundle, not a game directory"),
-            _ => self
-                .relative
-                .as_ref()
-                .expect("file/bundle target has a relative path"),
+        let relative = match &self.relative {
+            Some(relative) => relative,
+            // `relative` is only `None` for a `GameDir` target.
+            None => bail!("expected a file or bundle, not a game directory"),
         };
 
         match &self.target {
             Target::SerializedFile(_) => self.env.load_serialized(relative),
             Target::Bundle(_) => self.env.load_addressables_bundle_content(relative),
-            Target::GameDir(_) => unreachable!(),
+            Target::GameDir(_) => unreachable!("game dir target has no relative path"),
         }
     }
 }
 
 /// Climb from the file's directory upward until a unity game dir probes
-/// successfully; fall back to the immediate parent directory otherwise.
+/// successfully. `ancestors()` includes the starting directory itself, so this
+/// also covers the case of the file living directly in a `*_Data` dir.
 fn env_for_file(
     file: &Path,
     tpk: TypeTreeCache<TpkTypeTreeBlob>,
@@ -81,9 +80,8 @@ fn env_for_file(
         }
     }
 
-    // Fallback: treat the parent dir as the root, no real game around.
-    let game_files = GameFiles::probe(start)
-        .with_context(|| format!("no unity game found above {}", file.display()))?;
-    let game_dir = game_files.game_dir.clone();
-    Ok((Environment::new(game_files, tpk), game_dir))
+    bail!(
+        "no unity game directory found at or above {}",
+        start.display()
+    )
 }

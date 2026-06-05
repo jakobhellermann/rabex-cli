@@ -39,8 +39,27 @@ fn is_bundle(path: &Path) -> Result<bool> {
     let mut f = std::fs::File::open(path)?;
     let mut magic = [0u8; 7];
     match f.read_exact(&mut magic) {
-        Ok(()) => Ok(&magic == b"UnityFS"),
+        Ok(()) => Ok(looks_like_bundle(&magic)),
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Whether `header` (the first bytes of a file) is a UnityFS bundle magic.
+fn looks_like_bundle(header: &[u8]) -> bool {
+    header.starts_with(b"UnityFS")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_bundle;
+
+    #[test]
+    fn bundle_magic_detection() {
+        assert!(looks_like_bundle(b"UnityFS\0\0\0"));
+        assert!(!looks_like_bundle(b"\x00\x00\x00\x00not a bundle"));
+        // A serialized file does not start with the bundle magic.
+        assert!(!looks_like_bundle(b"Unity"));
+        assert!(!looks_like_bundle(b""));
     }
 }
