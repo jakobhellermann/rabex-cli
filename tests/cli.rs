@@ -151,6 +151,31 @@ fn obj_dumps_json_to_stdout() {
     assert_eq!(value["m_Name"], "Player");
 }
 
+/// A negative path id (common in real bundles) must be accepted as the value,
+/// not rejected as an unknown flag. It fails later as "no such object", not at
+/// arg parsing.
+#[test]
+fn obj_accepts_negative_path_id() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("--file")
+        .arg(&path)
+        .args(["obj", "-8333449340390664235"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "negative id should parse as a value, not a flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("8333449340390664235"),
+        "should fail looking up the id: {stderr}"
+    );
+}
+
 #[test]
 fn obj_from_standalone_bundle() {
     let (_tmp, path, go_ids) = standalone_bundle(&["Player"]);

@@ -59,7 +59,10 @@ pub struct LsArgs {
     pub r#type: Option<String>,
 }
 
+// Path ids are i64 and routinely negative; let clap accept `-8333…` as the
+// positional value rather than treating it as an unknown flag.
 #[derive(Args)]
+#[command(allow_negative_numbers = true)]
 pub struct ObjArgs {
     /// The path id of the object to dump.
     #[arg(add = ArgValueCandidates::new(|| crate::complete::path_ids().unwrap_or_default()))]
