@@ -82,6 +82,59 @@ fn nonexistent_path_errors() {
         .failure();
 }
 
+#[test]
+fn info_serialized_file_reports_header() {
+    let (_tmp, path, _) = game_with_file("level0", &["Player", "Camera"]);
+
+    rabex()
+        .arg("info")
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("serialized file"))
+        // Four objects: two GameObjects + two Transforms.
+        .stdout(predicates::str::contains("objects: 4"))
+        .stdout(predicates::str::contains(format!(
+            "unity version: {}",
+            fixtures::TEST_UNITY_VERSION
+        )));
+}
+
+/// A file with the UnityFS magic is detected as a bundle and routed to the
+/// bundle reader; a truncated one fails there rather than being misread as a
+/// serialized file. (Synthesizing a valid bundle is left to end-to-end runs;
+/// here we only pin the detect → bundle-reader path and its error handling.)
+#[test]
+fn info_truncated_bundle_errors_as_bundle() {
+    let (_tmp, path, _) = game_with_file("x.bundle", &["Player"]);
+    // Overwrite with just the magic so detect classifies it as a bundle, but
+    // the reader has nothing valid to parse.
+    std::fs::write(&path, b"UnityFS\0\0\0\0\0").unwrap();
+
+    rabex().arg("info").arg(&path).assert().failure();
+}
+
+#[test]
+fn info_game_dir_reports_summary() {
+    // A game dir needs a globalgamemanagers to resolve its unity version.
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    let (ggm, _) = Flat::new(&["Player"]).write();
+    std::fs::write(data_dir.join("globalgamemanagers"), ggm).unwrap();
+    let (lvl, _) = Flat::new(&["Camera"]).write();
+    std::fs::write(data_dir.join("level0"), lvl).unwrap();
+
+    rabex()
+        .arg("info")
+        .arg(&data_dir)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("game directory"))
+        .stdout(predicates::str::contains("serialized files:"))
+        .stdout(predicates::str::contains("addressables:"));
+}
+
 /// The game-dir walk-up: a file nested below `*_Data` still finds its game
 /// root by climbing ancestors, so `ls` works without the file sitting directly
 /// in `*_Data`.

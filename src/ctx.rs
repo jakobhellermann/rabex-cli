@@ -46,6 +46,10 @@ impl Ctx {
         }
     }
 
+    pub fn env(&self) -> &Environment {
+        &self.env
+    }
+
     /// Load the target as a serialized file (file or bundle). Bails on a game dir.
     pub fn load(&self) -> Result<SerializedFileHandle<'_>> {
         let relative = match &self.relative {
