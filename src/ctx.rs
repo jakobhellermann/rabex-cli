@@ -79,7 +79,12 @@ impl Ctx {
 
         match &self.target {
             Target::SerializedFile { .. } => self.env.load_serialized(relative),
-            Target::Bundle { .. } => self.load_bundle(relative),
+            // With a game context a `--bundle` path is an addressables bundle
+            // (relative to the build folder); standalone it's a raw path.
+            Target::Bundle {
+                game_dir: Some(_), ..
+            } => self.env.load_addressables_bundle_content(relative),
+            Target::Bundle { game_dir: None, .. } => self.load_raw_bundle(relative),
             Target::GameDir(_) => unreachable!("game dir target has no relative path"),
         }
     }
@@ -87,19 +92,24 @@ impl Ctx {
     /// Open the bundle target's `BundleFileReader` (e.g. to list its entries).
     /// Bails unless the target is a bundle.
     pub fn open_bundle(&self) -> Result<BundleFileReader<Cursor<Data>>> {
-        let relative = match &self.target {
-            Target::Bundle { .. } => self.relative.as_ref().expect("bundle target has a path"),
+        match &self.target {
+            Target::Bundle { game_dir, .. } => {
+                let relative = self.relative.as_ref().expect("bundle target has a path");
+                match game_dir {
+                    Some(_) => self.env.load_addressables_bundle(relative),
+                    None => self.raw_bundle_reader(relative),
+                }
+            }
             _ => bail!("expected a bundle"),
-        };
-        self.bundle_reader(relative)
+        }
     }
 
-    /// Open a bundle at a *raw* relative path through the env resolver.
+    /// Open a standalone bundle at a raw path through the env resolver.
     ///
     /// `Environment::load_addressables_bundle` joins the addressables build
-    /// folder onto the path, which only works for bundles inside a game's `aa/`
-    /// tree. This reads the bundle directly so a standalone `.bundle` works too.
-    fn bundle_reader(&self, relative: &Path) -> Result<BundleFileReader<Cursor<Data>>> {
+    /// folder onto the path; this reads the file directly instead, so a bundle
+    /// outside any game (`--bundle some.bundle` with no game context) works.
+    fn raw_bundle_reader(&self, relative: &Path) -> Result<BundleFileReader<Cursor<Data>>> {
         let data = self
             .env
             .game_files
@@ -116,9 +126,9 @@ impl Ctx {
             .with_context(|| format!("open bundle {}", relative.display()))
     }
 
-    /// Load the main serialized file out of a bundle at a relative path.
-    fn load_bundle(&self, relative: &Path) -> Result<SerializedFileHandle<'_>> {
-        let bundle = self.bundle_reader(relative)?;
+    /// Load the main serialized file out of a standalone (raw-path) bundle.
+    fn load_raw_bundle(&self, relative: &Path) -> Result<SerializedFileHandle<'_>> {
+        let bundle = self.raw_bundle_reader(relative)?;
 
         let entry = bundle
             .main_serializedfile()

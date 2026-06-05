@@ -13,12 +13,17 @@ pub fn run(ctx: &Ctx, args: LsArgs) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    // On a whole game, `ls` lists the game's serialized files; on a file or
-    // bundle it lists the contained objects.
+    // On a whole game, `ls` lists the game's serialized files and addressables
+    // bundles; on a file or bundle it lists the contained objects.
     match &ctx.target {
         Target::GameDir(_) => {
-            for path in ctx.env().game_files.serialized_files()? {
+            let env = ctx.env();
+            for path in env.game_files.serialized_files()? {
                 writeln!(out, "{}", path.display())?;
+            }
+            // Addressables bundles, if the game has any.
+            for bundle in env.addressables_bundles().unwrap_or_default() {
+                writeln!(out, "{}", bundle.display())?;
             }
             Ok(())
         }

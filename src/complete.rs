@@ -49,33 +49,46 @@ pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
     Ok(candidates)
 }
 
-/// Candidates for `--file`/`--bundle` when a game context is set: the serialized
-/// files of that game. Without a game context there's nothing to enumerate, so
-/// the shell falls back to plain path completion.
-pub fn game_files() -> Result<Vec<CompletionCandidate>> {
-    let target = current_target()?;
+/// The `Environment` for the game context currently typed, if any.
+/// `--file`/`--bundle` completion only makes sense with a game to enumerate;
+/// without one the shell falls back to plain path completion.
+fn current_game_env() -> Result<Option<rabex_env::Environment>> {
+    use rabex_env::rabex::tpk::TpkTypeTreeBlob;
+    use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 
-    // Only meaningful with a game context; resolve it the same way Target does.
+    let target = current_target()?;
     let game_dir = match (&target.steam_game, &target.game_dir) {
         (Some(name), None) => crate::locate::locate_steam_game(name)?,
         (None, Some(dir)) => dir.clone(),
-        _ => return Ok(Vec::new()),
+        _ => return Ok(None),
     };
 
-    let env = rabex_env::Environment::new_in(
-        &game_dir,
-        rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache::new(
-            rabex_env::rabex::tpk::TpkTypeTreeBlob::embedded(),
-        ),
-    )?;
+    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
+    Ok(Some(rabex_env::Environment::new_in(&game_dir, tpk)?))
+}
 
-    let candidates = env
-        .game_files
-        .serialized_files()?
+fn paths_to_candidates(paths: Vec<std::path::PathBuf>) -> Vec<CompletionCandidate> {
+    paths
         .into_iter()
         .map(|p| CompletionCandidate::new(p.to_string_lossy().into_owned()))
-        .collect();
-    Ok(candidates)
+        .collect()
+}
+
+/// Candidates for `--file`: the game's serialized files (game-relative).
+pub fn game_files() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    Ok(paths_to_candidates(env.game_files.serialized_files()?))
+}
+
+/// Candidates for `--bundle`: the game's addressables bundles (relative to the
+/// addressables build folder, the form `--bundle` expects with a game context).
+pub fn bundle_files() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    Ok(paths_to_candidates(env.addressables_bundles()?))
 }
 
 /// Candidates for `--steam-game`: installed steam games that look like unity

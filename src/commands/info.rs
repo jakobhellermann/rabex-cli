@@ -67,15 +67,18 @@ fn game_info(ctx: &Ctx, out: &mut impl Write) -> Result<()> {
         .unity_version()
         .map_or_else(|e| format!("<unknown: {e}>"), |v| v.to_string());
     let serialized = env.game_files.serialized_files()?.len();
-    let addressables = match env.addressables() {
-        Ok(Some(_)) => "yes",
-        Ok(None) => "no",
-        Err(_) => "error",
+    let (addressables, bundles) = match env.addressables() {
+        Ok(Some(_)) => ("yes", env.addressables_bundles().map(|b| b.len()).ok()),
+        Ok(None) => ("no", None),
+        Err(_) => ("error", None),
     };
 
     writeln!(out, "game directory")?;
     writeln!(out, "  unity version: {unity_version}")?;
     writeln!(out, "  serialized files: {serialized}")?;
     writeln!(out, "  addressables: {addressables}")?;
+    if let Some(bundles) = bundles {
+        writeln!(out, "  addressables bundles: {bundles}")?;
+    }
     Ok(())
 }

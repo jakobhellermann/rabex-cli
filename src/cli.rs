@@ -47,8 +47,8 @@ pub struct TargetArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "bundle", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
     pub file: Option<PathBuf>,
 
-    /// An asset bundle: relative to the game context, or a standalone path.
-    #[arg(long, value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
+    /// An addressables bundle (relative to the game), or a standalone bundle path.
+    #[arg(long, value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::bundle_files().unwrap_or_default()))]
     pub bundle: Option<PathBuf>,
 }
 
