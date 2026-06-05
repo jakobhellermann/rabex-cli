@@ -1,11 +1,16 @@
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
-use rabex_env::game_files::GameFiles;
+use rabex_env::env::Data;
+use rabex_env::game_files::{GameFiles, LevelFiles};
 use rabex_env::handle::SerializedFileHandle;
+use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
+use rabex_env::rabex::files::serializedfile::SerializedFile;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
+use rabex_env::resolver::EnvResolver as _;
 
 use crate::target::Target;
 
@@ -60,15 +65,59 @@ impl Ctx {
 
         match &self.target {
             Target::SerializedFile(_) => self.env.load_serialized(relative),
-            Target::Bundle(_) => self.env.load_addressables_bundle_content(relative),
+            Target::Bundle(_) => self.load_bundle(relative),
             Target::GameDir(_) => unreachable!("game dir target has no relative path"),
         }
     }
+
+    /// Load the main serialized file out of a bundle at a *raw* relative path.
+    ///
+    /// `Environment::load_addressables_bundle_content` joins the addressables
+    /// build folder onto the path, which only works for bundles inside a game's
+    /// `aa/` tree. This reads the bundle directly so a standalone `.bundle`
+    /// works too. Mirrors `load_addressables_bundle_content_leaf`, minus the
+    /// aa-build join.
+    fn load_bundle(&self, relative: &Path) -> Result<SerializedFileHandle<'_>> {
+        let data = self
+            .env
+            .game_files
+            .read_path(relative)
+            .with_context(|| format!("read bundle {}", relative.display()))?;
+
+        // Bundles often omit their unity version; supply the game's if we have
+        // one (a standalone bundle without a game around it just goes without).
+        let mut config = ExtractionConfig::default();
+        if let Ok(version) = self.env.unity_version() {
+            config = config.with_fallback_unity_version(version.clone());
+        }
+        let bundle = BundleFileReader::from_reader(Cursor::new(data), &config)
+            .with_context(|| format!("open bundle {}", relative.display()))?;
+
+        let entry = bundle
+            .main_serializedfile()
+            .context("bundle contains no serialized file")?;
+        let content = bundle
+            .read_at(&entry.path)?
+            .context("missing bundle entry")?;
+        let mut file = SerializedFile::from_reader(&mut Cursor::new(content.as_slice()))?;
+        if let Ok(version) = self.env.unity_version() {
+            file.m_UnityVersion.get_or_insert(version.clone());
+        }
+
+        Ok(self
+            .env
+            .insert_cache(entry.path.clone().into(), file, Data::InMemory(content)))
+    }
 }
 
-/// Climb from the file's directory upward until a unity game dir probes
-/// successfully. `ancestors()` includes the starting directory itself, so this
-/// also covers the case of the file living directly in a `*_Data` dir.
+/// Build an `Environment` for a standalone file or bundle, returning it
+/// together with the directory paths are resolved against.
+///
+/// Climbs from the file's directory upward looking for a real unity game dir
+/// (`*_Data`); rooting there means externals and addressables resolve. If none
+/// is found, falls back to a bare `GameFiles` rooted at the file's own
+/// directory — enough to load and inspect the file itself, but with no game
+/// context (addressables/external lookups simply come up empty).
 fn env_for_file(
     file: &Path,
     tpk: TypeTreeCache<TpkTypeTreeBlob>,
@@ -84,8 +133,9 @@ fn env_for_file(
         }
     }
 
-    bail!(
-        "no unity game directory found at or above {}",
-        start.display()
-    )
+    let game_files = GameFiles {
+        game_dir: start.to_path_buf(),
+        level_files: LevelFiles::Unpacked,
+    };
+    Ok((Environment::new(game_files, tpk), start.to_path_buf()))
 }

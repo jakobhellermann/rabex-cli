@@ -155,10 +155,11 @@ fn ls_finds_game_dir_from_nested_file() {
         .stdout(predicates::str::contains("GameObject"));
 }
 
-/// A file with no `*_Data` directory anywhere above it can't be rooted, so the
-/// walk-up bails with a clear message rather than guessing.
+/// A serialized file with no `*_Data` directory above it is still inspectable:
+/// the env falls back to a bare resolver rooted at the file's own directory,
+/// so `ls` works without any surrounding game.
 #[test]
-fn no_game_dir_above_file_errors() {
+fn ls_standalone_file_without_game_dir() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("plain");
     std::fs::create_dir(&dir).unwrap();
@@ -170,8 +171,61 @@ fn no_game_dir_above_file_errors() {
         .arg("ls")
         .arg(&path)
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("no unity game directory found"));
+        .success()
+        .stdout(predicates::str::contains("GameObject"));
+}
+
+/// Write a standalone `.bundle` (no surrounding game) into a temp dir and
+/// return (tempdir, path, gameobject ids inside).
+fn standalone_bundle(names: &[&'static str]) -> (TempDir, PathBuf, Vec<i64>) {
+    let tmp = TempDir::new().unwrap();
+    let (serialized, go_ids) = Flat::new(names).write();
+    let bytes = fixtures::bundle_with_serialized("CAB-test", &serialized);
+    let path = tmp.path().join("loose.bundle");
+    std::fs::write(&path, bytes).unwrap();
+    (tmp, path, go_ids)
+}
+
+#[test]
+fn info_standalone_bundle_lists_entries() {
+    let (_tmp, path, _) = standalone_bundle(&["Player"]);
+
+    rabex()
+        .arg("info")
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("bundle"))
+        .stdout(predicates::str::contains("serialized"))
+        .stdout(predicates::str::contains("CAB-test"));
+}
+
+#[test]
+fn ls_standalone_bundle() {
+    let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
+
+    rabex()
+        .arg("ls")
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("GameObject").count(2));
+}
+
+#[test]
+fn obj_from_standalone_bundle() {
+    let (_tmp, path, go_ids) = standalone_bundle(&["Player"]);
+
+    let assert = rabex()
+        .arg("obj")
+        .arg(&path)
+        .arg(go_ids[0].to_string())
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["m_Name"], "Player");
 }
 
 /// `ls`/`obj` on a game *directory* must bail cleanly, not panic. (Regression:

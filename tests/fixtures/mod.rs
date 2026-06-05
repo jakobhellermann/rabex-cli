@@ -9,6 +9,8 @@
 //! tests need.
 #![allow(dead_code)]
 
+use std::io::Cursor;
+
 use rabex_env::Environment;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::UnityVersion;
@@ -91,4 +93,42 @@ impl Flat {
 
         (sfb.write_vec().unwrap(), go_ids)
     }
+}
+
+/// Wrap raw serialized-file bytes into a minimal uncompressed UnityFS bundle
+/// holding a single serialized entry named `entry_name`.
+pub fn bundle_with_serialized(entry_name: &str, serialized: &[u8]) -> Vec<u8> {
+    use rabex_env::rabex::files::bundlefile::{
+        BundleFileHeader, BundleSignature, CompressionType, write_bundle,
+    };
+    use rabex_env::rabex::files::unityfile::FileEntry;
+
+    let unity_version: UnityVersion = TEST_UNITY_VERSION.parse().unwrap();
+    let header = BundleFileHeader {
+        signature: BundleSignature::UnityFS,
+        version: 7,
+        unity_version: "5.x.x".to_owned(),
+        unity_revision: Some(unity_version),
+        // `write_bundle` fills in the real size.
+        size: 0,
+    };
+
+    let files = [FileEntry {
+        offset: 0,
+        size: serialized.len() as i64,
+        flags: FileEntry::FLAG_SERIALIZEDFILE,
+        path: entry_name.to_owned(),
+    }];
+
+    let mut out = Cursor::new(Vec::new());
+    write_bundle(
+        &header,
+        &mut out,
+        CompressionType::None,
+        CompressionType::None,
+        &files,
+        serialized,
+    )
+    .unwrap();
+    out.into_inner()
 }
