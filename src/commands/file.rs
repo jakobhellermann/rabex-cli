@@ -148,7 +148,34 @@ pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
         }
         print_node(file, &transform, 0, components, out)?;
     }
+
+    // Objects not reachable through the GameObject hierarchy (managers, assets,
+    // orphaned components) — e.g. globalgamemanagers has only these.
+    let outside = objects_outside_hierarchy(file)?;
+    if outside > 0 {
+        let noun = if outside == 1 { "object" } else { "objects" };
+        writeln!(out, "{outside} {noun} outside the hierarchy")?;
+    }
     Ok(())
+}
+
+/// Count objects not covered by the GameObject hierarchy: total objects minus
+/// every transform, its GameObject, and that GameObject's components.
+fn objects_outside_hierarchy<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+) -> Result<usize> {
+    let mut covered = std::collections::HashSet::new();
+    for handle in file.transforms() {
+        let transform = handle.read()?;
+        covered.insert(handle.path_id());
+        covered.insert(transform.m_GameObject.m_PathID);
+        if let Ok(go) = file.deref_read(transform.m_GameObject) {
+            for pair in &go.m_Component {
+                covered.insert(pair.component.m_PathID);
+            }
+        }
+    }
+    Ok(file.file.objects().len().saturating_sub(covered.len()))
 }
 
 fn print_node<R: EnvResolver, P: TypeTreeProvider>(
