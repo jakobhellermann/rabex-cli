@@ -122,7 +122,7 @@ pub enum BundleVerb {
 #[derive(Args)]
 pub struct BundleFileArgs {
     /// Name of the file (CAB) inside the bundle.
-    #[arg(value_name = "CAB")]
+    #[arg(value_name = "CAB", add = ArgValueCandidates::new(|| crate::complete::bundle_cabs().unwrap_or_default()))]
     pub cab: String,
 
     #[command(subcommand)]

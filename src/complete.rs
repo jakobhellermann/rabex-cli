@@ -133,6 +133,29 @@ pub fn game_files() -> Result<Vec<CompletionCandidate>> {
     Ok(paths_to_candidates(env.game_files.serialized_files()?))
 }
 
+/// Candidates for `bundle <path> file <CAB>`: the serialized files inside the
+/// bundle named on the command line.
+pub fn bundle_cabs() -> Result<Vec<CompletionCandidate>> {
+    use rabex_env::rabex::files::unityfile::FileEntry;
+
+    let matches = current_matches()?;
+    let game = game_args(&matches);
+    let Some(("bundle", bundle_match)) = matches.subcommand() else {
+        return Ok(Vec::new());
+    };
+    let Some(path) = bundle_match.get_one::<PathBuf>("path") else {
+        return Ok(Vec::new());
+    };
+
+    let (_env, bundle) = ctx::open_bundle(&game, path)?;
+    Ok(bundle
+        .files()
+        .iter()
+        .filter(|entry| entry.flags & FileEntry::FLAG_SERIALIZEDFILE != 0)
+        .map(|entry| CompletionCandidate::new(entry.path.clone()))
+        .collect())
+}
+
 /// Candidates for a `bundle <path>`: the game's addressables bundles (relative
 /// to the addressables build folder, the form the command expects with a game).
 pub fn bundle_files() -> Result<Vec<CompletionCandidate>> {
