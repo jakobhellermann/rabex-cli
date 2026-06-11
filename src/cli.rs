@@ -57,6 +57,10 @@ pub struct AddressableArgs {
     /// Addressables key/address (e.g. `_GameCameras`, `Scenes/Menu_Title`).
     #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
     pub key: String,
+
+    /// List each dependency bundle (default: just the count).
+    #[arg(long)]
+    pub dependencies: bool,
 }
 
 #[derive(Args)]

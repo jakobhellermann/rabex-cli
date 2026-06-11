@@ -23,7 +23,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Ls => commands::game::ls(&ctx::require_game_env(game)?),
         Command::Scenes => commands::game::scenes(&ctx::require_game_env(game)?),
         Command::Addressable(args) => {
-            commands::game::addressable(&ctx::require_game_env(game)?, &args.key)
+            commands::game::addressable(&ctx::require_game_env(game)?, &args.key, args.dependencies)
         }
         Command::Bundle(args) => commands::bundle::run(game, args),
         Command::File(args) => {

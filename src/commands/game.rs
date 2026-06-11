@@ -50,7 +50,7 @@ pub fn ls(env: &Environment) -> Result<()> {
 /// to — the same set `Addressables.Load*(key)` would resolve. A key can map to
 /// several assets (it may be a label), so each is listed with its type,
 /// internal id and bundle.
-pub fn addressable(env: &Environment, key: &str) -> Result<()> {
+pub fn addressable(env: &Environment, key: &str, list_deps: bool) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -77,23 +77,59 @@ pub fn addressable(env: &Environment, key: &str) -> Result<()> {
     } else {
         "locations"
     };
-    writeln!(out, "{key}  ({} {noun})", locations.len())?;
-    for loc in &locations {
-        writeln!(out)?;
-        writeln!(out, "  {:<13}{}", "type:", loc.type_.class_name())?;
-        writeln!(out, "  {:<13}{}", "primary key:", loc.primary_key)?;
+    writeln!(out, "{key} ({} {noun})", locations.len())?;
+    for (i, loc) in locations.iter().enumerate() {
+        if i > 0 {
+            writeln!(out)?;
+        }
+        writeln!(out, "  {:<14}{}", "type:", loc.type_.class_name())?;
+        writeln!(out, "  {:<14}{}", "primary key:", loc.primary_key)?;
         writeln!(
             out,
-            "  {:<13}{}",
+            "  {:<14}{}",
             "internal id:",
             addressables.evaluate_string(&loc.internal_id)
         )?;
-        writeln!(out, "  {:<13}{}", "provider:", loc.provider_name())?;
+        writeln!(out, "  {:<14}{}", "provider:", loc.provider_name())?;
         if let Some(bundle) = location_bundle(addressables, loc, &build_folder) {
-            writeln!(out, "  {:<13}{}", "bundle:", bundle.display())?;
+            writeln!(out, "  {:<14}{}", "bundle:", bundle.display())?;
+        }
+        // The full set of bundles needed for this asset (its own bundle plus the
+        // shared bundles it transitively references) is often huge — show the
+        // count, and only list them with `--dependencies`.
+        if !loc.dependencies.is_empty() {
+            writeln!(out, "  {:<14}{}", "dependencies:", loc.dependencies.len())?;
+            if list_deps {
+                for dep in &loc.dependencies {
+                    writeln!(
+                        out,
+                        "    {}",
+                        dependency_label(addressables, dep, &build_folder)
+                    )?;
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// A dependency's display label: its bundle path (relative to the build folder)
+/// if it is an `AssetBundle`, else its evaluated internal id plus provider.
+fn dependency_label(
+    addressables: &AddressablesData,
+    dep: &ResourceLocation,
+    build_folder: &Path,
+) -> String {
+    let id = addressables.evaluate_string(&dep.internal_id);
+    if dep.provider_id.as_str() == resource_providers::ASSET_BUNDLE {
+        let path = Path::new(&id);
+        path.strip_prefix(build_folder)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    } else {
+        format!("{id}  ({})", dep.provider_name())
+    }
 }
 
 /// The bundle (relative to the build folder) an addressable location lives in:
