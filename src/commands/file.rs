@@ -172,8 +172,10 @@ pub(crate) fn component_label<R: EnvResolver, P: TypeTreeProvider>(
     Ok(format!("{:?}", handle.class_id()))
 }
 
-/// `cat` a [`ComponentPath`]: with a `@component` selector, dump that component
-/// as JSON; without one, list the GameObject's components by name.
+/// `cat` a [`ComponentPath`]: dump the selected component as JSON, or the
+/// GameObject itself when no `@component` is given. PPtrs in the output carry a
+/// `$ref` (see [`dump_path_id`]), so a GameObject's `m_Component` lists its
+/// components by path.
 pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     args: CatArgs,
@@ -182,21 +184,8 @@ pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
     let transform = resolve_path(file, &args.path)?;
     let go = file.deref_read(transform.m_GameObject)?;
 
-    match &args.path.component {
-        // A GameObject's raw struct is just component pointers; the useful view
-        // is the named component list (the discovery step before `@component`).
-        None => {
-            let active = if go.m_IsActive { "active" } else { "inactive" };
-            writeln!(
-                out,
-                "{}  #{}  (layer {}, tag {}, {})",
-                go.m_Name, transform.m_GameObject.m_PathID, go.m_Layer, go.m_Tag, active
-            )?;
-            for pair in &go.m_Component {
-                writeln!(out, "  - {}", component_label(file, pair.component)?)?;
-            }
-            Ok(())
-        }
+    let path_id = match &args.path.component {
+        None => transform.m_GameObject.m_PathID,
         Some(selector) => {
             let mut matches = Vec::new();
             for pair in &go.m_Component {
@@ -204,10 +193,10 @@ pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
                     matches.push(pair.component.m_PathID);
                 }
             }
-            let path_id = pick(matches, selector, "component")?;
-            dump_path_id(file, path_id, args.format, out)
+            pick(matches, selector, "component")?
         }
-    }
+    };
+    dump_path_id(file, path_id, args.format, out)
 }
 
 /// Walk the hierarchy described by `path`'s segments to the target GameObject's

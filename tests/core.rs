@@ -109,8 +109,8 @@ fn tree_components_lists_each_components() {
 }
 
 #[test]
-fn cat_lists_components_for_gameobject() {
-    let (bytes, go_ids) = Flat::new(&["Player"]).write();
+fn cat_dumps_gameobject_as_json() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
@@ -119,15 +119,14 @@ fn cat_lists_components_for_gameobject() {
             format: Format::Json,
         };
         file::cat(file, args, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
 
-        // No @component: list the GameObject's components by name.
+        // No @component: dump the GameObject; its sole component is the Transform,
+        // whose PPtr gains a re-cat-able $ref.
+        assert_eq!(value["m_Name"], "Player");
         assert_eq!(
-            out,
-            format!(
-                "Player  #{}  (layer 0, tag 0, active)\n  - Transform\n",
-                go_ids[0]
-            )
+            value["m_Component"][0]["component"]["$ref"],
+            "Player@Transform"
         );
     });
 }
