@@ -117,7 +117,7 @@ pub struct CatArgs {
     /// Reference like `Root/Child@SpriteRenderer`. Disambiguate equal names
     /// with `:<index>` (`A/B:2@Fsm:1`); escape `/ @ :` with `\`. Without a
     /// `@component`, dumps the GameObject itself.
-    #[arg(value_name = "PATH", value_parser = crate::component_path::parse)]
+    #[arg(value_name = "PATH", value_parser = crate::component_path::parse, add = ArgValueCandidates::new(|| crate::complete::component_paths().unwrap_or_default()))]
     pub path: crate::component_path::ComponentPath,
 
     /// Output format.

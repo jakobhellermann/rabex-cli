@@ -12,10 +12,15 @@ use clap::{ArgMatches, CommandFactory as _};
 use clap_complete::CompletionCandidate;
 use rabex_env::Environment;
 use rabex_env::handle::SerializedFileHandle;
+use rabex_env::rabex::tpk::TpkTypeTreeBlob;
+use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::{Cli, GameArgs};
 use crate::ctx;
+
+/// The concrete handle type the completion helpers operate on.
+type Handle<'a> = SerializedFileHandle<'a, GameFiles, TypeTreeCache<TpkTypeTreeBlob>>;
 
 /// Re-parse the in-progress command line into `ArgMatches`.
 ///
@@ -54,26 +59,14 @@ fn paths_to_candidates(paths: Vec<PathBuf>) -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// Object path ids of the file selected on the command line (for `obj <id>`),
-/// each labelled with its class id. Supports `file <path>` and `scene <name>`.
-pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
+/// Resolve the serialized file selected on the command line (`file <path>` or
+/// `scene <name>`) and hand its handle to `f`. Returns no candidates when no
+/// such target is present.
+fn with_target_handle(
+    f: impl FnOnce(&Handle<'_>) -> Result<Vec<CompletionCandidate>>,
+) -> Result<Vec<CompletionCandidate>> {
     let matches = current_matches()?;
     let game = game_args(&matches);
-
-    fn candidates<
-        R: rabex_env::resolver::EnvResolver,
-        P: rabex_env::rabex::typetree::TypeTreeProvider,
-    >(
-        handle: &SerializedFileHandle<'_, R, P>,
-    ) -> Vec<CompletionCandidate> {
-        handle
-            .objects::<()>()
-            .map(|obj| {
-                CompletionCandidate::new(obj.path_id().to_string())
-                    .help(Some(format!("{:?}", obj.class_id()).into()))
-            })
-            .collect()
-    }
 
     match matches.subcommand() {
         Some(("file", m)) => {
@@ -82,7 +75,7 @@ pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
             };
             let (env, relative) = ctx::open_file(&game, path)?;
             let handle = env.load_serialized(&relative)?;
-            Ok(candidates(&handle))
+            f(&handle)
         }
         Some(("scene", m)) => {
             let Some(name) = m.get_one::<String>("name") else {
@@ -90,10 +83,34 @@ pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
             };
             let env = ctx::require_game_env(&game)?;
             let handle = ctx::open_scene(&env, name)?;
-            Ok(candidates(&handle))
+            f(&handle)
         }
         _ => Ok(Vec::new()),
     }
+}
+
+/// Object path ids of the selected file (for `obj <id>`), labelled with class.
+pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
+    with_target_handle(|handle| {
+        Ok(handle
+            .objects::<()>()
+            .map(|obj| {
+                CompletionCandidate::new(obj.path_id().to_string())
+                    .help(Some(format!("{:?}", obj.class_id()).into()))
+            })
+            .collect())
+    })
+}
+
+/// Every component path of the selected file (for `cat <path>`); the shell
+/// filters by the typed prefix.
+pub fn component_paths() -> Result<Vec<CompletionCandidate>> {
+    with_target_handle(|handle| {
+        Ok(crate::qualify::all_paths(handle)
+            .into_iter()
+            .map(|path| CompletionCandidate::new(path.to_string()))
+            .collect())
+    })
 }
 
 /// Candidates for a `file <path>`: the game's serialized files (game-relative).

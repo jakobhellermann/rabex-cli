@@ -256,3 +256,132 @@ fn roots<R: EnvResolver, P: TypeTreeProvider>(
     }
     roots
 }
+
+/// A hierarchy node: a Transform plus its owning GameObject's name.
+struct Node {
+    transform: Transform,
+    name: String,
+}
+
+/// Every addressable component path in the file — each GameObject and each of
+/// its components — for `cat` completion. Best-effort: unreadable nodes are
+/// skipped. The shell does the prefix matching, so we just enumerate.
+pub fn all_paths<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+) -> Vec<ComponentPath> {
+    let mut roots = Vec::new();
+    for handle in file.transforms() {
+        let Ok(transform) = handle.read() else {
+            continue;
+        };
+        if transform.m_Father.optional().is_some() {
+            continue;
+        }
+        if let Some(node) = node_of(file, transform) {
+            roots.push(node);
+        }
+    }
+
+    let mut out = Vec::new();
+    walk_level(file, &[], roots, &mut out);
+    out
+}
+
+fn node_of<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    transform: Transform,
+) -> Option<Node> {
+    let name = file.deref_read(transform.m_GameObject).ok()?.m_Name;
+    Some(Node { transform, name })
+}
+
+/// Emit paths for every node at this level (siblings) and recurse into each.
+fn walk_level<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    prefix: &[Field],
+    nodes: Vec<Node>,
+    out: &mut Vec<ComponentPath>,
+) {
+    let mut counter = Counter::new(nodes.iter().map(|n| n.name.as_str()));
+    for node in &nodes {
+        let mut segments = prefix.to_vec();
+        segments.push(Field {
+            name: node.name.clone(),
+            index: counter.next_index(&node.name),
+        });
+
+        out.push(ComponentPath {
+            segments: segments.clone(),
+            component: None,
+        });
+        emit_components(file, &segments, &node.transform, out);
+
+        let children = node
+            .transform
+            .m_Children
+            .iter()
+            .filter_map(|child| file.deref_read(*child).ok())
+            .filter_map(|transform| node_of(file, transform))
+            .collect();
+        walk_level(file, &segments, children, out);
+    }
+}
+
+/// Emit a `…@Component` path for each component of `transform`'s GameObject.
+fn emit_components<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    segments: &[Field],
+    transform: &Transform,
+    out: &mut Vec<ComponentPath>,
+) {
+    let Ok(go) = file.deref_read(transform.m_GameObject) else {
+        return;
+    };
+    let labels: Vec<String> = go
+        .m_Component
+        .iter()
+        .filter_map(|pair| component_label(file, pair.component).ok())
+        .collect();
+
+    let mut counter = Counter::new(labels.iter().map(String::as_str));
+    for label in &labels {
+        let index = counter.next_index(label);
+        out.push(ComponentPath {
+            segments: segments.to_vec(),
+            component: Some(Field {
+                name: label.clone(),
+                index,
+            }),
+        });
+    }
+}
+
+/// Assigns disambiguating indices: `None` for names that occur once, else a
+/// running 0-based index per occurrence.
+struct Counter {
+    totals: HashMap<String, usize>,
+    seen: HashMap<String, usize>,
+}
+
+impl Counter {
+    fn new<'a>(names: impl Iterator<Item = &'a str>) -> Self {
+        let mut totals = HashMap::new();
+        for name in names {
+            *totals.entry(name.to_owned()).or_insert(0) += 1;
+        }
+        Counter {
+            totals,
+            seen: HashMap::new(),
+        }
+    }
+
+    fn next_index(&mut self, name: &str) -> Option<usize> {
+        if self.totals.get(name).copied().unwrap_or(0) <= 1 {
+            return None;
+        }
+        let seen = self.seen.entry(name.to_owned()).or_insert(0);
+        let index = *seen;
+        *seen += 1;
+        Some(index)
+    }
+}
