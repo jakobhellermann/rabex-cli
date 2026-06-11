@@ -41,12 +41,22 @@ pub enum Command {
     Ls,
     /// List scenes (build settings + addressables).
     Scenes,
+    /// Look up an addressables key (its catalog location and bundle).
+    #[command(visible_alias = "aa")]
+    Addressable(AddressableArgs),
     /// Inspect asset bundles (no path: list all bundles).
     Bundle(BundleArgs),
     /// Inspect a serialized file.
     File(FileArgs),
     /// Inspect a scene by name (resolved via build settings / addressables).
     Scene(SceneArgs),
+}
+
+#[derive(Args)]
+pub struct AddressableArgs {
+    /// Addressables key/address (e.g. `_GameCameras`, `Scenes/Menu_Title`).
+    #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
+    pub key: String,
 }
 
 #[derive(Args)]

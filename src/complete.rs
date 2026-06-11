@@ -142,6 +142,24 @@ pub fn bundle_files() -> Result<Vec<CompletionCandidate>> {
     Ok(paths_to_candidates(env.addressables_bundles()?))
 }
 
+/// Candidates for `addressable <KEY>`: every addressables key in the catalog.
+pub fn addressable_keys() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    let Some(addressables) = env.addressables()? else {
+        return Ok(Vec::new());
+    };
+    let mut keys = std::collections::BTreeSet::new();
+    for mut catalog in addressables.catalogs(&env.game_files)? {
+        let catalog = catalog.read()?;
+        for loc in catalog.locations() {
+            keys.insert(loc.primary_key.to_string());
+        }
+    }
+    Ok(keys.into_iter().map(CompletionCandidate::new).collect())
+}
+
 /// Candidates for a `scene <name>`: built-in + addressables scene names, with
 /// their source (`levelN` / bundle) as help text.
 pub fn scene_names() -> Result<Vec<CompletionCandidate>> {

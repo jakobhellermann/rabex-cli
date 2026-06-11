@@ -22,6 +22,9 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Info => commands::game::info(&ctx::require_game_env(game)?),
         Command::Ls => commands::game::ls(&ctx::require_game_env(game)?),
         Command::Scenes => commands::game::scenes(&ctx::require_game_env(game)?),
+        Command::Addressable(args) => {
+            commands::game::addressable(&ctx::require_game_env(game)?, &args.key)
+        }
         Command::Bundle(args) => commands::bundle::run(game, args),
         Command::File(args) => {
             let (env, relative) = ctx::open_file(game, &args.path)?;
