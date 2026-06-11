@@ -106,8 +106,23 @@ pub enum FileVerb {
     Ls(LsArgs),
     /// Dump a single object by its path id.
     Obj(ObjArgs),
+    /// Dump a component (or GameObject) by hierarchy path.
+    Cat(CatArgs),
     /// Print the Transform hierarchy.
     Tree(TreeArgs),
+}
+
+#[derive(Args)]
+pub struct CatArgs {
+    /// Reference like `Root/Child@SpriteRenderer`. Disambiguate equal names
+    /// with `:<index>` (`A/B:2@Fsm:1`); escape `/ @ :` with `\`. Without a
+    /// `@component`, dumps the GameObject itself.
+    #[arg(value_name = "PATH", value_parser = crate::component_path::parse)]
+    pub path: crate::component_path::ComponentPath,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Json)]
+    pub format: Format,
 }
 
 #[derive(Args)]

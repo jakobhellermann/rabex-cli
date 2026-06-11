@@ -4,8 +4,9 @@
 mod fixtures;
 
 use fixtures::{Flat, with_handle};
-use rabex_cli::cli::Format;
+use rabex_cli::cli::{CatArgs, Format};
 use rabex_cli::commands::file;
+use rabex_cli::component_path::parse as parse_path;
 
 const PATH: &str = "level0";
 
@@ -104,6 +105,56 @@ fn tree_components_lists_each_components() {
 
         // The fixture gives each GameObject a single Transform component.
         assert_eq!(out, format!("Player  #{}\n  - Transform\n", go_ids[0]));
+    });
+}
+
+#[test]
+fn cat_dumps_gameobject_by_path() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        let args = CatArgs {
+            path: parse_path("Player").unwrap(),
+            format: Format::Json,
+        };
+        file::cat(file, args, &mut out).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+        assert_eq!(value["m_Name"], "Player");
+    });
+}
+
+#[test]
+fn cat_dumps_component_by_path() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        let args = CatArgs {
+            path: parse_path("Player@Transform").unwrap(),
+            format: Format::Json,
+        };
+        file::cat(file, args, &mut out).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+        // A Transform points back at its GameObject.
+        assert!(value.get("m_GameObject").is_some(), "{value}");
+    });
+}
+
+#[test]
+fn cat_missing_path_errors() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        let args = CatArgs {
+            path: parse_path("Nope").unwrap(),
+            format: Format::Json,
+        };
+        let err = file::cat(file, args, &mut out).unwrap_err();
+        assert!(err.to_string().contains("Nope"), "{err}");
     });
 }
 

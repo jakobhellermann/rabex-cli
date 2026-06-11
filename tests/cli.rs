@@ -271,6 +271,36 @@ fn file_obj_accepts_negative_path_id() {
     );
 }
 
+/// `cat <path>@<component>` resolves a component by hierarchy path and dumps it.
+#[test]
+fn file_cat_dumps_component_by_path() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["cat", "Player@Transform"])
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert!(value.get("m_GameObject").is_some(), "{value}");
+}
+
+/// A malformed component path is rejected at parse time, before doing any work.
+#[test]
+fn file_cat_rejects_bad_index() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["cat", "Player:x"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("invalid index"));
+}
+
 #[test]
 fn file_obj_missing_id_errors_without_redundancy() {
     let (_tmp, path, _) = standalone_file(&["Player"]);

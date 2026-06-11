@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result, bail};
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::objects::{ClassId, PPtr};
@@ -11,7 +11,8 @@ use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::Transform;
 
-use crate::cli::{FileVerb, Format, ObjArgs};
+use crate::cli::{CatArgs, FileVerb, Format, ObjArgs};
+use crate::component_path::{ComponentPath, Field};
 
 pub fn run<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
@@ -23,6 +24,7 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Info => info(file, &mut out),
         FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Obj(args) => dump(file, args, &mut out),
+        FileVerb::Cat(args) => cat(file, args, &mut out),
         FileVerb::Tree(args) => tree(file, args.components, &mut out),
     }
 }
@@ -166,4 +168,93 @@ fn component_label<R: EnvResolver, P: TypeTreeProvider>(
         return Ok(script.m_ClassName);
     }
     Ok(format!("{:?}", handle.class_id()))
+}
+
+/// Resolve a [`ComponentPath`] to an object and dump it like [`dump`].
+pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    args: CatArgs,
+    out: &mut impl Write,
+) -> Result<()> {
+    let path_id = resolve(file, &args.path)?;
+    dump_path_id(file, path_id, args.format, out)
+}
+
+/// Walk the hierarchy described by `path` and return the path id of the target
+/// component (or the GameObject itself when no component is selected).
+fn resolve<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path: &ComponentPath,
+) -> Result<PathId> {
+    let mut roots = Vec::new();
+    for transform in file.transforms() {
+        let transform = transform.read()?;
+        if transform.m_Father.optional().is_none() {
+            roots.push(transform);
+        }
+    }
+
+    let (first, rest) = path.segments.split_first().expect("at least one segment");
+    let mut current = pick_transform(file, roots, first, "root object")?;
+    for segment in rest {
+        let children = current
+            .m_Children
+            .iter()
+            .map(|child| file.deref_read(*child))
+            .collect::<Result<Vec<_>>>()?;
+        current = pick_transform(file, children, segment, "child object")?;
+    }
+
+    match &path.component {
+        None => Ok(current.m_GameObject.m_PathID),
+        Some(selector) => {
+            let go = file.deref_read(current.m_GameObject)?;
+            let mut matches = Vec::new();
+            for pair in &go.m_Component {
+                if component_label(file, pair.component)? == selector.name {
+                    matches.push(pair.component.m_PathID);
+                }
+            }
+            pick(matches, selector, "component")
+        }
+    }
+}
+
+/// Pick the transform whose GameObject name matches `field` from `transforms`.
+fn pick_transform<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    transforms: Vec<Transform>,
+    field: &Field,
+    kind: &str,
+) -> Result<Transform> {
+    let mut matches = Vec::new();
+    for transform in transforms {
+        let name = file.deref_read(transform.m_GameObject)?.m_Name;
+        if name == field.name {
+            matches.push(transform);
+        }
+    }
+    pick(matches, field, kind)
+}
+
+/// Select one match by `field.index`, or the sole match if no index was given.
+fn pick<T>(matches: Vec<T>, field: &Field, kind: &str) -> Result<T> {
+    let n = matches.len();
+    match field.index {
+        Some(index) => matches.into_iter().nth(index).with_context(|| {
+            format!(
+                "{kind} '{}': index {index} out of range ({n} match(es))",
+                field.name
+            )
+        }),
+        None => match n {
+            0 => bail!("no {kind} matching '{}'", field.name),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            n => bail!(
+                "{kind} '{}' is ambiguous ({n} matches); add ':<index>' (0..{})",
+                field.name,
+                n - 1
+            ),
+        },
+    }
 }
