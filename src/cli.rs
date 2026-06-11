@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::ArgValueCandidates;
 
+use crate::component_path::ComponentPath;
+
 /// Inspect Unity serialized files, asset bundles and game directories.
 ///
 /// A game context is set with `--steam-game`/`--game-dir` before the verb, e.g.
@@ -118,7 +120,7 @@ pub struct CatArgs {
     /// with `:<index>` (`A/B:2@Fsm:1`); escape `/ @ :` with `\`. Without a
     /// `@component`, dumps the GameObject itself.
     #[arg(value_name = "PATH", value_parser = crate::component_path::parse, add = ArgValueCandidates::new(|| crate::complete::component_paths().unwrap_or_default()))]
-    pub path: crate::component_path::ComponentPath,
+    pub path: ComponentPath,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Json)]
@@ -127,6 +129,11 @@ pub struct CatArgs {
 
 #[derive(Args)]
 pub struct TreeArgs {
+    /// Root the tree at this GameObject (hierarchy path, e.g. `Root/Child`);
+    /// omit to start from every scene root.
+    #[arg(value_name = "PATH", value_parser = crate::component_path::parse, add = ArgValueCandidates::new(|| crate::complete::gameobject_paths().unwrap_or_default()))]
+    pub path: Option<ComponentPath>,
+
     /// Under each GameObject, list its components (class id, or the script name
     /// for MonoBehaviours).
     #[arg(long)]

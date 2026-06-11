@@ -79,7 +79,7 @@ fn tree_lists_roots_at_depth_zero() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        file::tree(file, false, &mut out).unwrap();
+        file::tree(file, None, false, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // A flat scene: every GameObject is a root, none indented.
@@ -95,12 +95,27 @@ fn tree_lists_roots_at_depth_zero() {
 }
 
 #[test]
+fn tree_scoped_to_a_root_path() {
+    let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        let root = parse_path("Camera").unwrap();
+        file::tree(file, Some(root), false, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        // Only the named GameObject (flat fixture: no children).
+        assert_eq!(out, format!("Camera  #{}\n", go_ids[1]));
+    });
+}
+
+#[test]
 fn tree_components_lists_each_components() {
     let (bytes, go_ids) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        file::tree(file, true, &mut out).unwrap();
+        file::tree(file, None, true, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // The fixture gives each GameObject a single Transform component.

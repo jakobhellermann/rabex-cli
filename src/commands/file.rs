@@ -25,7 +25,7 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Obj(args) => dump(file, args, &mut out),
         FileVerb::Cat(args) => cat(file, args, &mut out),
-        FileVerb::Tree(args) => tree(file, args.components, &mut out),
+        FileVerb::Tree(args) => tree(file, args.path, args.components, &mut out),
     }
 }
 
@@ -105,15 +105,24 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     Ok(())
 }
 
-/// Print the GameObject hierarchy: each root transform (no parent) and its
-/// children recursively, indented by depth. Names come from each transform's
-/// GameObject; the GameObject path id is shown for `obj` follow-up. With
-/// `components`, each GameObject's components are listed beneath it.
+/// Print the GameObject hierarchy, indented by depth. Names come from each
+/// transform's GameObject; the GameObject path id is shown for `obj` follow-up.
+/// With `components`, each GameObject's components are listed beneath it. `root`
+/// scopes the tree to one GameObject's subtree; without it, every scene root.
 pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
+    root: Option<ComponentPath>,
     components: bool,
     out: &mut impl Write,
 ) -> Result<()> {
+    if let Some(root) = root {
+        if root.component.is_some() {
+            bail!("tree takes a GameObject path, not a component (drop the `@…`)");
+        }
+        let transform = resolve_path(file, &root)?;
+        return print_node(file, &transform, 0, components, out);
+    }
+
     for transform in file.transforms() {
         let transform = transform.read()?;
         if transform.m_Father.optional().is_some() {

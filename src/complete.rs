@@ -17,7 +17,7 @@ use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::{Cli, GameArgs};
-use crate::ctx;
+use crate::{ctx, qualify};
 
 /// The concrete handle type the completion helpers operate on.
 type Handle<'a> = SerializedFileHandle<'a, GameFiles, TypeTreeCache<TpkTypeTreeBlob>>;
@@ -106,8 +106,20 @@ pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
 /// filters by the typed prefix.
 pub fn component_paths() -> Result<Vec<CompletionCandidate>> {
     with_target_handle(|handle| {
-        Ok(crate::qualify::all_paths(handle)
+        Ok(qualify::all_paths(handle)
             .into_iter()
+            .map(|path| CompletionCandidate::new(path.to_string()))
+            .collect())
+    })
+}
+
+/// GameObject paths of the selected file (for `tree <path>`): the component
+/// paths without a `@component` selector.
+pub fn gameobject_paths() -> Result<Vec<CompletionCandidate>> {
+    with_target_handle(|handle| {
+        Ok(qualify::all_paths(handle)
+            .into_iter()
+            .filter(|path| path.component.is_none())
             .map(|path| CompletionCandidate::new(path.to_string()))
             .collect())
     })
