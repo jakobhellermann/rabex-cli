@@ -50,11 +50,11 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         Command::Bundle(args) => commands::bundle::run(game, args),
         Command::Addressable(args) => {
             let env = ctx::require_game_env(game)?;
-            match args.verb {
-                AddressableVerb::Info(info) => {
-                    commands::game::addressable_info(&env, &args.key, info.dependencies)
-                }
-            }
+            let dependencies = match args.verb {
+                Some(AddressableVerb::Info(info)) => info.dependencies,
+                None => false,
+            };
+            commands::game::addressable_info(&env, &args.key, dependencies)
         }
     }
 }

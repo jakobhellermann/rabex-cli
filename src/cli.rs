@@ -129,7 +129,7 @@ pub struct SceneArgs {
     #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::scene_names().unwrap_or_default()))]
     pub name: String,
     #[command(subcommand)]
-    pub verb: FileVerb,
+    pub verb: Option<FileVerb>,
 }
 
 #[derive(Args)]
@@ -138,7 +138,7 @@ pub struct FileArgs {
     #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
     pub path: PathBuf,
     #[command(subcommand)]
-    pub verb: FileVerb,
+    pub verb: Option<FileVerb>,
 }
 
 #[derive(Args)]
@@ -147,7 +147,7 @@ pub struct BundleArgs {
     #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::bundle_files().unwrap_or_default()))]
     pub path: PathBuf,
     #[command(subcommand)]
-    pub verb: BundleVerb,
+    pub verb: Option<BundleVerb>,
 }
 
 #[derive(Subcommand)]
@@ -166,7 +166,7 @@ pub struct BundleFileArgs {
     #[arg(value_name = "CAB", add = ArgValueCandidates::new(|| crate::complete::bundle_cabs().unwrap_or_default()))]
     pub cab: String,
     #[command(subcommand)]
-    pub verb: FileVerb,
+    pub verb: Option<FileVerb>,
 }
 
 #[derive(Args)]
@@ -175,7 +175,7 @@ pub struct AddressableArgs {
     #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
     pub key: String,
     #[command(subcommand)]
-    pub verb: AddressableVerb,
+    pub verb: Option<AddressableVerb>,
 }
 
 #[derive(Subcommand)]
@@ -236,7 +236,7 @@ pub struct ObjectArgs {
     #[arg(value_name = "REF", value_parser = crate::component_path::parse_object_ref, add = ArgValueCandidates::new(|| crate::complete::object_refs().unwrap_or_default()))]
     pub reference: ObjectRef,
     #[command(subcommand)]
-    pub verb: ObjectVerb,
+    pub verb: Option<ObjectVerb>,
 }
 
 #[derive(Subcommand)]

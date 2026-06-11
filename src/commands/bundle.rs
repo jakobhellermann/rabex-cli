@@ -15,7 +15,7 @@ use crate::ctx;
 
 pub fn run(game: &Context, args: BundleArgs) -> Result<()> {
     let (env, bundle) = ctx::open_bundle(game, &args.path)?;
-    match args.verb {
+    match args.verb.unwrap_or(BundleVerb::Info) {
         BundleVerb::Info => info(&bundle),
         BundleVerb::Files => list_files(&bundle),
         BundleVerb::File(file_args) => {

@@ -18,11 +18,11 @@ use crate::component_path::{ComponentPath, Field, ObjectRef};
 /// `scene`, `file` and `bundle <path> file <cab>` commands.
 pub fn run_verb<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
-    verb: FileVerb,
+    verb: Option<FileVerb>,
 ) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match verb {
+    match verb.unwrap_or(FileVerb::Info) {
         FileVerb::Info => info(file, &mut out),
         FileVerb::Tree(args) => {
             let components = match (args.components, args.scripts) {
@@ -35,7 +35,7 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Objects(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Object(args) => {
             let path_id = resolve_object_ref(file, &args.reference)?;
-            match args.verb {
+            match args.verb.unwrap_or(ObjectVerb::Info) {
                 ObjectVerb::Info => object_info(file, path_id, &mut out),
                 ObjectVerb::Cat(cat) => dump_path_id(file, path_id, cat.format, &mut out),
             }
