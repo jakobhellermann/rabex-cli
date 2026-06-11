@@ -146,6 +146,24 @@ fn game_info_reports_summary() {
         .stdout(predicates::str::contains("addressables:"));
 }
 
+/// With no `--game-dir`/`--steam-game`, the game is detected from the current
+/// working directory.
+#[test]
+fn game_detected_from_current_dir() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    let (ggm, _) = Flat::new(&["Player"]).write();
+    std::fs::write(data_dir.join("globalgamemanagers"), ggm).unwrap();
+
+    rabex()
+        .current_dir(tmp.path())
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("game directory"));
+}
+
 // -----------------------------------------------------------------------------
 // bundle
 // -----------------------------------------------------------------------------
@@ -353,7 +371,7 @@ fn game_command_without_context_errors() {
         .arg("info")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("needs a game"));
+        .stderr(predicates::str::contains("no game"));
 }
 
 /// `bundle` without a path lists all bundles, which needs a game context.
@@ -364,7 +382,7 @@ fn bundle_ls_without_path_needs_game() {
         .arg("ls")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("needs a game"));
+        .stderr(predicates::str::contains("no game"));
 }
 
 // -----------------------------------------------------------------------------

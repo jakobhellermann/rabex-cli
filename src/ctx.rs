@@ -27,13 +27,23 @@ pub fn tpk() -> TypeTreeCache<TpkTypeTreeBlob> {
     TypeTreeCache::new(TpkTypeTreeBlob::embedded())
 }
 
-/// The game directory from the context flags, if any was given.
+/// The game directory from the context flags, or — when none are given — a
+/// unity game discovered at or above the current working directory.
 fn game_dir(game: &GameArgs) -> Result<Option<PathBuf>> {
     match (&game.steam_game, &game.game_dir) {
         (Some(name), _) => Ok(Some(locate_steam_game(name)?)),
         (None, Some(dir)) => Ok(Some(dir.clone())),
-        (None, None) => Ok(None),
+        (None, None) => Ok(game_from_cwd()),
     }
+}
+
+/// A unity game directory at or above the current working directory, so running
+/// inside a game's folder needs no `--steam-game`/`--game-dir`.
+fn game_from_cwd() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    cwd.ancestors()
+        .find(|dir| GameFiles::probe(dir).is_ok())
+        .map(Path::to_path_buf)
 }
 
 /// The game [`Environment`], if a context was given.
@@ -48,8 +58,9 @@ pub fn game_env(game: &GameArgs) -> Result<Option<Environment>> {
 
 /// The game [`Environment`]; errors if no context was given.
 pub fn require_game_env(game: &GameArgs) -> Result<Environment> {
-    game_env(game)?
-        .context("this command needs a game — pass --steam-game <name> or --game-dir <dir>")
+    game_env(game)?.context(
+        "no game: pass --steam-game <name> / --game-dir <dir>, or run inside a game directory",
+    )
 }
 
 /// Build an `Environment` for a standalone file/bundle and the path relative to
