@@ -6,6 +6,7 @@ use std::io::Write;
 use anyhow::Result;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::objects::pptr::PathId;
+use rabex_env::rabex::objects::{ClassId, PPtr};
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::Transform;
@@ -22,7 +23,7 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Info => info(file, &mut out),
         FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Obj(args) => dump(file, args, &mut out),
-        FileVerb::Tree => tree(file, &mut out),
+        FileVerb::Tree(args) => tree(file, args.components, &mut out),
     }
 }
 
@@ -102,9 +103,11 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
 
 /// Print the GameObject hierarchy: each root transform (no parent) and its
 /// children recursively, indented by depth. Names come from each transform's
-/// GameObject; the GameObject path id is shown for `obj` follow-up.
+/// GameObject; the GameObject path id is shown for `obj` follow-up. With
+/// `components`, each GameObject's components are listed beneath it.
 pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
+    components: bool,
     out: &mut impl Write,
 ) -> Result<()> {
     for transform in file.transforms() {
@@ -112,7 +115,7 @@ pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
         if transform.m_Father.optional().is_some() {
             continue;
         }
-        print_node(file, &transform, 0, out)?;
+        print_node(file, &transform, 0, components, out)?;
     }
     Ok(())
 }
@@ -121,15 +124,46 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     transform: &Transform,
     depth: usize,
+    components: bool,
     out: &mut impl Write,
 ) -> Result<()> {
-    let go = transform.m_GameObject;
-    let name = file.deref_read(go)?.m_Name;
-    writeln!(out, "{}{}  #{}", "  ".repeat(depth), name, go.m_PathID)?;
+    let go = file.deref_read(transform.m_GameObject)?;
+    writeln!(
+        out,
+        "{}{}  #{}",
+        "  ".repeat(depth),
+        go.m_Name,
+        transform.m_GameObject.m_PathID
+    )?;
+
+    if components {
+        for pair in &go.m_Component {
+            writeln!(
+                out,
+                "{}- {}",
+                "  ".repeat(depth + 1),
+                component_label(file, pair.component)?
+            )?;
+        }
+    }
 
     for child in &transform.m_Children {
         let child = file.deref_read(*child)?;
-        print_node(file, &child, depth + 1, out)?;
+        print_node(file, &child, depth + 1, components, out)?;
     }
     Ok(())
+}
+
+/// A component's class name, or the script's class name for a MonoBehaviour.
+fn component_label<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    component: PPtr,
+) -> Result<String> {
+    let handle = file.deref(component.typed::<()>())?;
+    if handle.class_id() == ClassId::MonoBehaviour
+        && let Some(script) = handle.mono_script()?
+    {
+        return Ok(script.m_ClassName);
+    }
+    Ok(format!("{:?}", handle.class_id()))
 }

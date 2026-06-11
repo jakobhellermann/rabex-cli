@@ -107,7 +107,15 @@ pub enum FileVerb {
     /// Dump a single object by its path id.
     Obj(ObjArgs),
     /// Print the Transform hierarchy.
-    Tree,
+    Tree(TreeArgs),
+}
+
+#[derive(Args)]
+pub struct TreeArgs {
+    /// Under each GameObject, list its components (class id, or the script name
+    /// for MonoBehaviours).
+    #[arg(long)]
+    pub components: bool,
 }
 
 #[derive(Args)]
