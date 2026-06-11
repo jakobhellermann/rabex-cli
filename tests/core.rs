@@ -138,16 +138,17 @@ fn tree_components_lists_each_components() {
 }
 
 #[test]
-fn tree_scripts_skips_non_monobehaviours() {
-    let (bytes, go_ids) = Flat::new(&["Player"]).write();
+fn tree_scripts_prunes_gameobjects_without_scripts() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
         file::tree(file, None, Components::Scripts, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
-        // The fixture's only component is a Transform, so scripts mode lists none.
-        assert_eq!(out, format!("Player  #{}\n", go_ids[0]));
+        // The fixture's only component is a Transform (no scripts), so the
+        // GameObject is pruned entirely.
+        assert_eq!(out, "");
     });
 }
 

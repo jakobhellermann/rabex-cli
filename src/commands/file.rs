@@ -138,7 +138,8 @@ pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
             bail!("tree takes a GameObject path, not a component (drop the `@…`)");
         }
         let transform = resolve_path(file, &root)?;
-        return print_node(file, &transform, 0, components, out);
+        print_node(file, &transform, 0, components, out)?;
+        return Ok(());
     }
 
     for transform in file.transforms() {
@@ -187,14 +188,40 @@ fn quote_if_spaced(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Print a node and its subtree; returns whether anything was printed. In
+/// [`Components::Scripts`] mode a GameObject with no scripts in its whole
+/// subtree is pruned (returns `false`), so only paths leading to a script show.
 fn print_node<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     transform: &Transform,
     depth: usize,
     components: Components,
     out: &mut impl Write,
-) -> Result<()> {
+) -> Result<bool> {
     let go = file.deref_read(transform.m_GameObject)?;
+
+    let mut component_lines = Vec::new();
+    if components != Components::None {
+        for pair in &go.m_Component {
+            let (class_id, label) = component_class_and_label(file, pair.component)?;
+            if components == Components::Scripts && class_id != ClassId::MonoBehaviour {
+                continue;
+            }
+            component_lines.push(format!("{}- {}", "  ".repeat(depth + 1), label));
+        }
+    }
+
+    // Render children first, so scripts mode can prune script-less subtrees.
+    let mut children = Vec::new();
+    for child in &transform.m_Children {
+        let child = file.deref_read(*child)?;
+        print_node(file, &child, depth + 1, components, &mut children)?;
+    }
+
+    if components == Components::Scripts && component_lines.is_empty() && children.is_empty() {
+        return Ok(false);
+    }
+
     writeln!(
         out,
         "{}{}  #{}",
@@ -202,22 +229,11 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
         quote_if_spaced(&go.m_Name),
         transform.m_GameObject.m_PathID
     )?;
-
-    if components != Components::None {
-        for pair in &go.m_Component {
-            let (class_id, label) = component_class_and_label(file, pair.component)?;
-            if components == Components::Scripts && class_id != ClassId::MonoBehaviour {
-                continue;
-            }
-            writeln!(out, "{}- {}", "  ".repeat(depth + 1), label)?;
-        }
+    for line in &component_lines {
+        writeln!(out, "{line}")?;
     }
-
-    for child in &transform.m_Children {
-        let child = file.deref_read(*child)?;
-        print_node(file, &child, depth + 1, components, out)?;
-    }
-    Ok(())
+    out.write_all(&children)?;
+    Ok(true)
 }
 
 /// A component's class name, or the script's class name for a MonoBehaviour.
