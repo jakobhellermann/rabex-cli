@@ -6,6 +6,7 @@ mod fixtures;
 use fixtures::{Flat, with_handle};
 use rabex_cli::cli::{CatArgs, Format};
 use rabex_cli::commands::file;
+use rabex_cli::commands::file::Components;
 use rabex_cli::component_path::parse as parse_path;
 
 const PATH: &str = "level0";
@@ -79,7 +80,7 @@ fn tree_lists_roots_at_depth_zero() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        file::tree(file, None, false, &mut out).unwrap();
+        file::tree(file, None, Components::None, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // A flat scene: every GameObject is a root, none indented.
@@ -101,7 +102,7 @@ fn tree_scoped_to_a_root_path() {
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
         let root = parse_path("Camera").unwrap();
-        file::tree(file, Some(root), false, &mut out).unwrap();
+        file::tree(file, Some(root), Components::None, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // Only the named GameObject (flat fixture: no children).
@@ -115,11 +116,25 @@ fn tree_components_lists_each_components() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        file::tree(file, None, true, &mut out).unwrap();
+        file::tree(file, None, Components::All, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // The fixture gives each GameObject a single Transform component.
         assert_eq!(out, format!("Player  #{}\n  - Transform\n", go_ids[0]));
+    });
+}
+
+#[test]
+fn tree_scripts_skips_non_monobehaviours() {
+    let (bytes, go_ids) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        file::tree(file, None, Components::Scripts, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        // The fixture's only component is a Transform, so scripts mode lists none.
+        assert_eq!(out, format!("Player  #{}\n", go_ids[0]));
     });
 }
 

@@ -25,8 +25,26 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Obj(args) => dump(file, args, &mut out),
         FileVerb::Cat(args) => cat(file, args, &mut out),
-        FileVerb::Tree(args) => tree(file, args.path, args.components, &mut out),
+        FileVerb::Tree(args) => {
+            let components = match (args.components, args.scripts) {
+                (_, true) => Components::Scripts,
+                (true, _) => Components::All,
+                _ => Components::None,
+            };
+            tree(file, args.path, components, &mut out)
+        }
     }
+}
+
+/// Which components to list beneath each GameObject in a `tree`.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Components {
+    /// None.
+    None,
+    /// Every component.
+    All,
+    /// Only MonoBehaviours (by script name).
+    Scripts,
 }
 
 /// Header information + type count for a serialized file.
@@ -107,12 +125,12 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
 
 /// Print the GameObject hierarchy, indented by depth. Names come from each
 /// transform's GameObject; the GameObject path id is shown for `obj` follow-up.
-/// With `components`, each GameObject's components are listed beneath it. `root`
+/// `components` selects which components to list beneath each GameObject. `root`
 /// scopes the tree to one GameObject's subtree; without it, every scene root.
 pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     root: Option<ComponentPath>,
-    components: bool,
+    components: Components,
     out: &mut impl Write,
 ) -> Result<()> {
     if let Some(root) = root {
@@ -137,7 +155,7 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     transform: &Transform,
     depth: usize,
-    components: bool,
+    components: Components,
     out: &mut impl Write,
 ) -> Result<()> {
     let go = file.deref_read(transform.m_GameObject)?;
@@ -149,14 +167,13 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
         transform.m_GameObject.m_PathID
     )?;
 
-    if components {
+    if components != Components::None {
         for pair in &go.m_Component {
-            writeln!(
-                out,
-                "{}- {}",
-                "  ".repeat(depth + 1),
-                component_label(file, pair.component)?
-            )?;
+            let (class_id, label) = component_class_and_label(file, pair.component)?;
+            if components == Components::Scripts && class_id != ClassId::MonoBehaviour {
+                continue;
+            }
+            writeln!(out, "{}- {}", "  ".repeat(depth + 1), label)?;
         }
     }
 
@@ -172,13 +189,23 @@ pub(crate) fn component_label<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     component: PPtr,
 ) -> Result<String> {
+    Ok(component_class_and_label(file, component)?.1)
+}
+
+/// A component's class id together with its display label (the script's class
+/// name for a MonoBehaviour, else the class id).
+fn component_class_and_label<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    component: PPtr,
+) -> Result<(ClassId, String)> {
     let handle = file.deref(component.typed::<()>())?;
-    if handle.class_id() == ClassId::MonoBehaviour
+    let class_id = handle.class_id();
+    if class_id == ClassId::MonoBehaviour
         && let Some(script) = handle.mono_script()?
     {
-        return Ok(script.m_ClassName);
+        return Ok((class_id, script.m_ClassName));
     }
-    Ok(format!("{:?}", handle.class_id()))
+    Ok((class_id, format!("{class_id:?}")))
 }
 
 /// `cat` a [`ComponentPath`]: dump the selected component as JSON, or the

@@ -138,6 +138,10 @@ pub struct TreeArgs {
     /// for MonoBehaviours).
     #[arg(long)]
     pub components: bool,
+
+    /// Like `--components`, but only MonoBehaviours (by script name).
+    #[arg(long, conflicts_with = "components")]
+    pub scripts: bool,
 }
 
 #[derive(Args)]
