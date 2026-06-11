@@ -22,12 +22,12 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Info => commands::game::info(&ctx::require_game_env(game)?),
         Command::Ls => commands::game::ls(&ctx::require_game_env(game)?),
         Command::Scenes => commands::game::scenes(&ctx::require_game_env(game)?),
-        Command::Addressable(args) => {
+        Command::Addressables(args) => {
             let env = ctx::require_game_env(game)?;
             match args.command {
-                cli::AddressableCmd::Stats => commands::game::addressable_stats(&env),
-                cli::AddressableCmd::Ls => commands::game::addressable_ls(&env),
-                cli::AddressableCmd::Info(info) => {
+                cli::AddressablesCmd::Stats => commands::game::addressable_stats(&env),
+                cli::AddressablesCmd::Ls => commands::game::addressable_ls(&env),
+                cli::AddressablesCmd::Info(info) => {
                     commands::game::addressable_info(&env, &info.key, info.dependencies)
                 }
             }
