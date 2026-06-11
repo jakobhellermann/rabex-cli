@@ -79,12 +79,19 @@ pub fn addressable(env: &Environment, key: &str) -> Result<()> {
     };
     writeln!(out, "{key}  ({} {noun})", locations.len())?;
     for loc in &locations {
-        let internal_id = addressables.evaluate_string(&loc.internal_id);
-        let bundle = match location_bundle(addressables, loc, &build_folder) {
-            Some(bundle) => format!("  [{}]", bundle.display()),
-            None => String::new(),
-        };
-        writeln!(out, "  {}  {internal_id}{bundle}", loc.type_.class_name())?;
+        writeln!(out)?;
+        writeln!(out, "  {:<13}{}", "type:", loc.type_.class_name())?;
+        writeln!(out, "  {:<13}{}", "primary key:", loc.primary_key)?;
+        writeln!(
+            out,
+            "  {:<13}{}",
+            "internal id:",
+            addressables.evaluate_string(&loc.internal_id)
+        )?;
+        writeln!(out, "  {:<13}{}", "provider:", loc.provider_name())?;
+        if let Some(bundle) = location_bundle(addressables, loc, &build_folder) {
+            writeln!(out, "  {:<13}{}", "bundle:", bundle.display())?;
+        }
     }
     Ok(())
 }
