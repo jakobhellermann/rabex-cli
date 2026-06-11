@@ -11,6 +11,9 @@ use assert_cmd::Command;
 use fixtures::Flat;
 use tempfile::TempDir;
 
+/// The CAB name used by [`standalone_bundle`].
+const BUNDLE_CAB: &str = "CAB-test";
+
 /// Write a flat scene into `<tmp>/Game_Data/<file>` and return (tempdir, full
 /// path, gameobject ids). The tempdir guard must outlive the file.
 fn game_with_file(file: &str, names: &[&'static str]) -> (TempDir, PathBuf, Vec<i64>) {
@@ -40,7 +43,7 @@ fn standalone_file(names: &[&'static str]) -> (TempDir, PathBuf, Vec<i64>) {
 fn standalone_bundle(names: &[&'static str]) -> (TempDir, PathBuf, Vec<i64>) {
     let tmp = TempDir::new().unwrap();
     let (serialized, go_ids) = Flat::new(names).write();
-    let bytes = fixtures::bundle_with_serialized("CAB-test", &serialized);
+    let bytes = fixtures::bundle_with_serialized(BUNDLE_CAB, &serialized);
     let path = tmp.path().join("loose.bundle");
     std::fs::write(&path, bytes).unwrap();
     (tmp, path, go_ids)
@@ -51,15 +54,15 @@ fn rabex() -> Command {
 }
 
 // -----------------------------------------------------------------------------
-// ls
+// file ls
 // -----------------------------------------------------------------------------
 
 #[test]
-fn ls_file_lists_objects() {
+fn file_ls_lists_objects() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
 
     rabex()
-        .arg("--file")
+        .arg("file")
         .arg(&path)
         .arg("ls")
         .assert()
@@ -69,11 +72,11 @@ fn ls_file_lists_objects() {
 }
 
 #[test]
-fn ls_type_filter() {
+fn file_ls_type_filter() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
 
     rabex()
-        .arg("--file")
+        .arg("file")
         .arg(&path)
         .args(["ls", "--type", "GameObject"])
         .assert()
@@ -82,24 +85,28 @@ fn ls_type_filter() {
         .stdout(predicates::str::contains("Transform").count(0));
 }
 
-/// `--game-dir DIR --file NAME` resolves the file relative to the game.
+/// `--game-dir DIR file NAME ls` resolves the file relative to the game.
 #[test]
-fn ls_file_relative_to_game_dir() {
+fn file_ls_relative_to_game_dir() {
     let (_tmp, path, _) = game_with_file("level0", &["Player"]);
     let data_dir = path.parent().unwrap();
 
     rabex()
         .arg("--game-dir")
         .arg(data_dir)
-        .args(["--file", "level0", "ls"])
+        .args(["file", "level0", "ls"])
         .assert()
         .success()
         .stdout(predicates::str::contains("GameObject"));
 }
 
+// -----------------------------------------------------------------------------
+// game ls / info
+// -----------------------------------------------------------------------------
+
 /// `ls` on a whole game lists its serialized files.
 #[test]
-fn ls_game_dir_lists_serialized_files() {
+fn game_ls_lists_serialized_files() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("Game_Data");
     std::fs::create_dir(&data_dir).unwrap();
@@ -119,137 +126,7 @@ fn ls_game_dir_lists_serialized_files() {
 }
 
 #[test]
-fn ls_standalone_bundle() {
-    let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
-
-    rabex()
-        .arg("--bundle")
-        .arg(&path)
-        .arg("ls")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("GameObject").count(2));
-}
-
-// -----------------------------------------------------------------------------
-// obj
-// -----------------------------------------------------------------------------
-
-#[test]
-fn obj_dumps_json_to_stdout() {
-    let (_tmp, path, go_ids) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("--file")
-        .arg(&path)
-        .arg("obj")
-        .arg(go_ids[0].to_string())
-        .assert()
-        .success();
-
-    let value = stdout_json(&assert);
-    assert_eq!(value["m_Name"], "Player");
-}
-
-/// A negative path id (common in real bundles) must be accepted as the value,
-/// not rejected as an unknown flag. It fails later as "no such object", not at
-/// arg parsing.
-#[test]
-fn obj_accepts_negative_path_id() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("--file")
-        .arg(&path)
-        .args(["obj", "-8333449340390664235"])
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    assert!(
-        !stderr.contains("unexpected argument"),
-        "negative id should parse as a value, not a flag: {stderr}"
-    );
-    assert!(
-        stderr.contains("8333449340390664235"),
-        "should fail looking up the id: {stderr}"
-    );
-}
-
-#[test]
-fn obj_from_standalone_bundle() {
-    let (_tmp, path, go_ids) = standalone_bundle(&["Player"]);
-
-    let assert = rabex()
-        .arg("--bundle")
-        .arg(&path)
-        .arg("obj")
-        .arg(go_ids[0].to_string())
-        .assert()
-        .success();
-
-    let value = stdout_json(&assert);
-    assert_eq!(value["m_Name"], "Player");
-}
-
-#[test]
-fn obj_missing_id_errors_without_redundancy() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("--file")
-        .arg(&path)
-        .args(["obj", "9999"])
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    assert!(stderr.contains("9999"), "stderr: {stderr}");
-    assert!(
-        !stderr.contains("Caused by"),
-        "error should not be wrapped redundantly: {stderr}"
-    );
-}
-
-// -----------------------------------------------------------------------------
-// info
-// -----------------------------------------------------------------------------
-
-#[test]
-fn info_serialized_file_reports_header() {
-    let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
-
-    rabex()
-        .arg("--file")
-        .arg(&path)
-        .arg("info")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("serialized file"))
-        .stdout(predicates::str::contains("objects: 4"))
-        .stdout(predicates::str::contains(format!(
-            "unity version: {}",
-            fixtures::TEST_UNITY_VERSION
-        )));
-}
-
-#[test]
-fn info_standalone_bundle_lists_entries() {
-    let (_tmp, path, _) = standalone_bundle(&["Player"]);
-
-    rabex()
-        .arg("--bundle")
-        .arg(&path)
-        .arg("info")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("bundle"))
-        .stdout(predicates::str::contains("serialized"))
-        .stdout(predicates::str::contains("CAB-test"));
-}
-
-#[test]
-fn info_game_dir_reports_summary() {
+fn game_info_reports_summary() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("Game_Data");
     std::fs::create_dir(&data_dir).unwrap();
@@ -269,16 +146,80 @@ fn info_game_dir_reports_summary() {
         .stdout(predicates::str::contains("addressables:"));
 }
 
-/// A `--bundle` with the UnityFS magic is routed to the bundle reader; a
-/// truncated one fails there rather than being misread.
+// -----------------------------------------------------------------------------
+// bundle
+// -----------------------------------------------------------------------------
+
+/// `bundle <path> ls` lists the bundle's contained files (CABs).
 #[test]
-fn info_truncated_bundle_errors() {
+fn bundle_ls_lists_files() {
+    let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
+
+    rabex()
+        .arg("bundle")
+        .arg(&path)
+        .arg("ls")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(BUNDLE_CAB));
+}
+
+/// `bundle <path> info` lists the bundle's entries with sizes and kinds.
+#[test]
+fn bundle_info_lists_entries() {
+    let (_tmp, path, _) = standalone_bundle(&["Player"]);
+
+    rabex()
+        .arg("bundle")
+        .arg(&path)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("bundle"))
+        .stdout(predicates::str::contains("serialized"))
+        .stdout(predicates::str::contains(BUNDLE_CAB));
+}
+
+/// `bundle <path> file <cab> ls` lists the objects in a contained file.
+#[test]
+fn bundle_file_ls_lists_objects() {
+    let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
+
+    rabex()
+        .arg("bundle")
+        .arg(&path)
+        .args(["file", BUNDLE_CAB, "ls"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("GameObject").count(2));
+}
+
+/// `bundle <path> file <cab> obj <id>` dumps an object from a contained file.
+#[test]
+fn bundle_file_obj_dumps_json() {
+    let (_tmp, path, go_ids) = standalone_bundle(&["Player"]);
+
+    let assert = rabex()
+        .arg("bundle")
+        .arg(&path)
+        .args(["file", BUNDLE_CAB, "obj"])
+        .arg(go_ids[0].to_string())
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert_eq!(value["m_Name"], "Player");
+}
+
+/// A truncated bundle fails in the bundle reader rather than being misread.
+#[test]
+fn bundle_truncated_errors() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("x.bundle");
     std::fs::write(&path, b"UnityFS\0\0\0\0\0").unwrap();
 
     rabex()
-        .arg("--bundle")
+        .arg("bundle")
         .arg(&path)
         .arg("info")
         .assert()
@@ -286,48 +227,114 @@ fn info_truncated_bundle_errors() {
 }
 
 // -----------------------------------------------------------------------------
-// target resolution
+// file obj
 // -----------------------------------------------------------------------------
 
 #[test]
-fn no_target_errors() {
+fn file_obj_dumps_json_to_stdout() {
+    let (_tmp, path, go_ids) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .arg("obj")
+        .arg(go_ids[0].to_string())
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert_eq!(value["m_Name"], "Player");
+}
+
+/// A negative path id (common in real bundles) must be accepted as the value,
+/// not rejected as an unknown flag. It fails later as "no such object", not at
+/// arg parsing.
+#[test]
+fn file_obj_accepts_negative_path_id() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["obj", "-8333449340390664235"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "negative id should parse as a value, not a flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("8333449340390664235"),
+        "should fail looking up the id: {stderr}"
+    );
+}
+
+#[test]
+fn file_obj_missing_id_errors_without_redundancy() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["obj", "9999"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("9999"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("Caused by"),
+        "error should not be wrapped redundantly: {stderr}"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// file info
+// -----------------------------------------------------------------------------
+
+#[test]
+fn file_info_reports_header() {
+    let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
+
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("serialized file"))
+        .stdout(predicates::str::contains("objects: 4"))
+        .stdout(predicates::str::contains(format!(
+            "unity version: {}",
+            fixtures::TEST_UNITY_VERSION
+        )));
+}
+
+// -----------------------------------------------------------------------------
+// target resolution
+// -----------------------------------------------------------------------------
+
+/// A game command without a game context errors clearly.
+#[test]
+fn game_command_without_context_errors() {
     rabex()
         .arg("info")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("no target given"));
+        .stderr(predicates::str::contains("needs a game"));
 }
 
+/// `bundle` without a path lists all bundles, which needs a game context.
 #[test]
-fn file_and_bundle_mutually_exclusive() {
-    let (_tmp, file, _) = standalone_file(&["Player"]);
-
+fn bundle_ls_without_path_needs_game() {
     rabex()
-        .arg("--file")
-        .arg(&file)
-        .args(["--bundle", "whatever", "info"])
+        .arg("bundle")
+        .arg("ls")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("cannot be used with"));
-}
-
-#[test]
-fn obj_on_game_dir_bails_cleanly() {
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().join("Game_Data");
-    std::fs::create_dir(&data_dir).unwrap();
-    let (bytes, _) = Flat::new(&["Player"]).write();
-    std::fs::write(data_dir.join("globalgamemanagers"), bytes).unwrap();
-
-    rabex()
-        .arg("--game-dir")
-        .arg(&data_dir)
-        .args(["obj", "1"])
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains(
-            "expected a file or bundle, not a game directory",
-        ));
+        .stderr(predicates::str::contains("needs a game"));
 }
 
 // -----------------------------------------------------------------------------
@@ -335,14 +342,14 @@ fn obj_on_game_dir_bails_cleanly() {
 // -----------------------------------------------------------------------------
 
 /// Run the binary as the `COMPLETE=fish` shim does, completing the `obj`
-/// path-id slot for `--file <path> obj <current>`:
-/// `rabex -- rabex --file <path> obj <current-token>`.
+/// path-id slot for `file <path> obj <current>`:
+/// `rabex -- rabex file <path> obj <current-token>`.
 fn complete_obj_path_id(path: &Path, current: &str) -> String {
     let assert = rabex()
         .env("COMPLETE", "fish")
         .arg("--")
         .arg("rabex")
-        .arg("--file")
+        .arg("file")
         .arg(path)
         .arg("obj")
         .arg(current)

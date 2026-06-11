@@ -1,79 +1,102 @@
 //! Dynamic shell completion helpers.
 //!
 //! `clap_complete` doesn't hand parsed arguments to a completer, so — like jj
-//! does — we re-parse `std::env::args_os()` ourselves to recover the target
-//! flags the user already typed, then offer context-aware candidates.
+//! does — we re-parse `std::env::args_os()` ourselves to recover the game
+//! context and selected file the user already typed, then offer context-aware
+//! candidates.
+
+use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{CommandFactory as _, FromArgMatches as _};
+use clap::{ArgMatches, CommandFactory as _};
 use clap_complete::CompletionCandidate;
+use rabex_env::Environment;
+use rabex_env::handle::SerializedFileHandle;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
-use crate::cli::{Cli, TargetArgs};
-use crate::ctx::Ctx;
+use crate::cli::{Cli, GameArgs};
+use crate::ctx;
 
-/// Recover the target-selection flags of the subcommand being completed.
+/// Re-parse the in-progress command line into `ArgMatches`.
 ///
-/// Reads them out of `ArgMatches` per-field rather than via
-/// `Cli::from_arg_matches`, because the latter also parses the (in-progress)
-/// `path_id` into an `i64` — which fails on an empty/partial value and would
-/// abort completion exactly when the user is mid-argument.
-fn current_target() -> Result<TargetArgs> {
+/// Errors are ignored (`ignore_errors`) because the line is mid-edit; we read
+/// fields out per-field rather than via `from_arg_matches`, which would also
+/// try to parse the (possibly empty/partial) `obj` path id into an `i64`.
+fn current_matches() -> Result<ArgMatches> {
     // The clap_complete prelude is `<bin> -- <bin> <actual args...>`, so skip 2.
     let args = std::env::args_os().skip(2);
-
-    let matches = Cli::command()
+    Ok(Cli::command()
         .disable_version_flag(true)
         .disable_help_flag(true)
         .ignore_errors(true)
-        .try_get_matches_from(args)?;
-
-    // Target flags live on the top-level command, before the subcommand.
-    Ok(TargetArgs::from_arg_matches(&matches)?)
+        .try_get_matches_from(args)?)
 }
 
-/// Candidates for an object path id: every path id in the target file, labelled
-/// with its class id. Clap filters these against the typed prefix.
-pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
-    let ctx = Ctx::new(&current_target()?)?;
-    let file = ctx.load()?;
-
-    let candidates = file
-        .objects::<()>()
-        .map(|obj| {
-            CompletionCandidate::new(obj.path_id().to_string())
-                .help(Some(format!("{:?}", obj.class_id()).into()))
-        })
-        .collect();
-    Ok(candidates)
+/// The game context flags, read from wherever they were typed (they are global).
+fn game_args(matches: &ArgMatches) -> GameArgs {
+    GameArgs {
+        steam_game: matches.get_one::<String>("steam_game").cloned(),
+        game_dir: matches.get_one::<PathBuf>("game_dir").cloned(),
+    }
 }
 
-/// The `Environment` for the game context currently typed, if any.
-/// `--file`/`--bundle` completion only makes sense with a game to enumerate;
-/// without one the shell falls back to plain path completion.
-fn current_game_env() -> Result<Option<rabex_env::Environment>> {
-    use rabex_env::rabex::tpk::TpkTypeTreeBlob;
-    use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
-
-    let target = current_target()?;
-    let game_dir = match (&target.steam_game, &target.game_dir) {
-        (Some(name), None) => crate::locate::locate_steam_game(name)?,
-        (None, Some(dir)) => dir.clone(),
-        _ => return Ok(None),
-    };
-
-    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
-    Ok(Some(rabex_env::Environment::new_in(&game_dir, tpk)?))
+/// The game `Environment` for the context currently typed, if any. Completion
+/// of game-relative paths only makes sense with a game to enumerate; without
+/// one the shell falls back to plain path completion.
+fn current_game_env() -> Result<Option<Environment>> {
+    ctx::game_env(&game_args(&current_matches()?))
 }
 
-fn paths_to_candidates(paths: Vec<std::path::PathBuf>) -> Vec<CompletionCandidate> {
+fn paths_to_candidates(paths: Vec<PathBuf>) -> Vec<CompletionCandidate> {
     paths
         .into_iter()
         .map(|p| CompletionCandidate::new(p.to_string_lossy().into_owned()))
         .collect()
 }
 
-/// Candidates for `--file`: the game's serialized files (game-relative).
+/// Object path ids of the file selected on the command line (for `obj <id>`),
+/// each labelled with its class id. Supports `file <path>` and `scene <name>`.
+pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
+    let matches = current_matches()?;
+    let game = game_args(&matches);
+
+    fn candidates<
+        R: rabex_env::resolver::EnvResolver,
+        P: rabex_env::rabex::typetree::TypeTreeProvider,
+    >(
+        handle: &SerializedFileHandle<'_, R, P>,
+    ) -> Vec<CompletionCandidate> {
+        handle
+            .objects::<()>()
+            .map(|obj| {
+                CompletionCandidate::new(obj.path_id().to_string())
+                    .help(Some(format!("{:?}", obj.class_id()).into()))
+            })
+            .collect()
+    }
+
+    match matches.subcommand() {
+        Some(("file", m)) => {
+            let Some(path) = m.get_one::<PathBuf>("path") else {
+                return Ok(Vec::new());
+            };
+            let (env, relative) = ctx::open_file(&game, path)?;
+            let handle = env.load_serialized(&relative)?;
+            Ok(candidates(&handle))
+        }
+        Some(("scene", m)) => {
+            let Some(name) = m.get_one::<String>("name") else {
+                return Ok(Vec::new());
+            };
+            let env = ctx::require_game_env(&game)?;
+            let handle = ctx::open_scene(&env, name)?;
+            Ok(candidates(&handle))
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Candidates for a `file <path>`: the game's serialized files (game-relative).
 pub fn game_files() -> Result<Vec<CompletionCandidate>> {
     let Some(env) = current_game_env()? else {
         return Ok(Vec::new());
@@ -81,13 +104,25 @@ pub fn game_files() -> Result<Vec<CompletionCandidate>> {
     Ok(paths_to_candidates(env.game_files.serialized_files()?))
 }
 
-/// Candidates for `--bundle`: the game's addressables bundles (relative to the
-/// addressables build folder, the form `--bundle` expects with a game context).
+/// Candidates for a `bundle <path>`: the game's addressables bundles (relative
+/// to the addressables build folder, the form the command expects with a game).
 pub fn bundle_files() -> Result<Vec<CompletionCandidate>> {
     let Some(env) = current_game_env()? else {
         return Ok(Vec::new());
     };
     Ok(paths_to_candidates(env.addressables_bundles()?))
+}
+
+/// Candidates for a `scene <name>`: built-in + addressables scene names, with
+/// their source (`levelN` / bundle) as help text.
+pub fn scene_names() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    Ok(ctx::scenes(&env)?
+        .into_iter()
+        .map(|scene| CompletionCandidate::new(scene.name).help(Some(scene.source.label().into())))
+        .collect())
 }
 
 /// Candidates for `--steam-game`: installed steam games that look like unity

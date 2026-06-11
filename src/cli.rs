@@ -5,51 +5,109 @@ use clap_complete::ArgValueCandidates;
 
 /// Inspect Unity serialized files, asset bundles and game directories.
 ///
-/// The target is selected with options *before* the verb, e.g.
-/// `rabex --file foo.bundle ls` or `rabex --steam-game silksong info`.
+/// A game context is set with `--steam-game`/`--game-dir` before the verb, e.g.
+/// `rabex --steam-game silksong scenes` or
+/// `rabex --steam-game silksong file level0 tree`. File/scene/bundle verbs also
+/// work standalone on a filesystem path without a game context.
 #[derive(Parser)]
-#[command(name = "rabex", version, about)]
+#[command(name = "rabex", version, about, disable_help_subcommand = true)]
 pub struct Cli {
     #[command(flatten)]
-    pub target: TargetArgs,
+    pub game: GameArgs,
 
     #[command(subcommand)]
     pub command: Command,
 }
 
-#[derive(Subcommand)]
-pub enum Command {
-    /// Show summary info about the target.
-    Info,
-    /// List the objects (or game files) of the target.
-    Ls(LsArgs),
-    /// Dump a single object by its path id.
-    Obj(ObjArgs),
-}
-
-/// How the user points rabex at something to inspect.
-///
-/// A *game context* may be set with `--steam-game` or `--game-dir`. A *file* or
-/// *bundle* may be selected with `--file`/`--bundle`, interpreted relative to
-/// the game context if one is set, or as a standalone path otherwise. Which
-/// combinations make sense is validated at runtime (see `Target::resolve`).
+/// The game context, shared by every command (optional for standalone paths).
 #[derive(Args, Clone)]
-pub struct TargetArgs {
-    /// Locate a game by steam name or app id (resolves to its `*_Data` dir).
-    #[arg(long, value_name = "NAME", conflicts_with = "game_dir", add = ArgValueCandidates::new(|| crate::complete::steam_games()))]
+pub struct GameArgs {
+    /// Locate a game by steam name or app id.
+    #[arg(long, global = true, value_name = "NAME", conflicts_with = "game_dir", add = ArgValueCandidates::new(crate::complete::steam_games))]
     pub steam_game: Option<String>,
 
     /// Path to a unity game directory (its parent or the `*_Data` dir).
-    #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    #[arg(long, global = true, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub game_dir: Option<PathBuf>,
+}
 
-    /// A serialized file: relative to the game context, or a standalone path.
-    #[arg(long, value_name = "PATH", conflicts_with = "bundle", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
-    pub file: Option<PathBuf>,
+#[derive(Subcommand)]
+pub enum Command {
+    /// Show summary info about the game.
+    Info,
+    /// List the game's serialized files.
+    Ls,
+    /// List scenes (build settings + addressables).
+    Scenes,
+    /// Inspect asset bundles (no path: list all bundles).
+    Bundle(BundleArgs),
+    /// Inspect a serialized file.
+    File(FileArgs),
+    /// Inspect a scene by name (resolved via build settings / addressables).
+    Scene(SceneArgs),
+}
 
-    /// An addressables bundle (relative to the game), or a standalone bundle path.
-    #[arg(long, value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::bundle_files().unwrap_or_default()))]
-    pub bundle: Option<PathBuf>,
+#[derive(Args)]
+pub struct FileArgs {
+    /// Serialized file: a game-relative path, or a standalone fs path.
+    #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
+    pub path: PathBuf,
+
+    #[command(subcommand)]
+    pub verb: FileVerb,
+}
+
+#[derive(Args)]
+pub struct SceneArgs {
+    /// Scene name (e.g. `Greymoor_05`).
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::scene_names().unwrap_or_default()))]
+    pub name: String,
+
+    #[command(subcommand)]
+    pub verb: FileVerb,
+}
+
+#[derive(Args)]
+pub struct BundleArgs {
+    /// Bundle path (game-relative or fs). Omit to list all bundles.
+    #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::bundle_files().unwrap_or_default()))]
+    pub path: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub verb: Option<BundleVerb>,
+}
+
+#[derive(Subcommand)]
+pub enum BundleVerb {
+    /// List entries: all bundles without a path, else the bundle's files.
+    Ls,
+    /// Show the bundle's contained files.
+    Info,
+    /// Inspect a serialized file (CAB) inside the bundle.
+    File(BundleFileArgs),
+}
+
+#[derive(Args)]
+pub struct BundleFileArgs {
+    /// Name of the file (CAB) inside the bundle.
+    #[arg(value_name = "CAB")]
+    pub cab: String,
+
+    #[command(subcommand)]
+    pub verb: FileVerb,
+}
+
+/// What to do with a selected serialized file (shared by file/scene/bundle).
+#[derive(Subcommand)]
+pub enum FileVerb {
+    /// Show header info (version, types, object/external counts).
+    Info,
+    /// List the objects (`path_id  ClassId`).
+    Ls(LsArgs),
+    /// Dump a single object by its path id.
+    Obj(ObjArgs),
+    /// Print the Transform hierarchy.
+    Tree,
 }
 
 #[derive(Args)]

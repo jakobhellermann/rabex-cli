@@ -2,25 +2,34 @@ pub mod cli;
 pub mod complete;
 pub mod ctx;
 pub mod locate;
-pub mod target;
 pub mod commands {
-    pub mod info;
-    pub mod ls;
-    pub mod obj;
+    pub mod bundle;
+    pub mod file;
+    pub mod game;
 }
 
 use anyhow::Result;
 
-use crate::cli::Cli;
-use crate::ctx::Ctx;
+use crate::cli::{Cli, Command};
 
 /// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
 pub fn run(cli: Cli) -> Result<()> {
-    let ctx = Ctx::new(&cli.target)?;
+    let game = &cli.game;
 
     match cli.command {
-        cli::Command::Info => commands::info::run(&ctx),
-        cli::Command::Ls(args) => commands::ls::run(&ctx, args),
-        cli::Command::Obj(args) => commands::obj::run(&ctx, args),
+        Command::Info => commands::game::info(&ctx::require_game_env(game)?),
+        Command::Ls => commands::game::ls(&ctx::require_game_env(game)?),
+        Command::Scenes => commands::game::scenes(&ctx::require_game_env(game)?),
+        Command::Bundle(args) => commands::bundle::run(game, args),
+        Command::File(args) => {
+            let (env, relative) = ctx::open_file(game, &args.path)?;
+            let handle = env.load_serialized(&relative)?;
+            commands::file::run(&handle, args.verb)
+        }
+        Command::Scene(args) => {
+            let env = ctx::require_game_env(game)?;
+            let handle = ctx::open_scene(&env, &args.name)?;
+            commands::file::run(&handle, args.verb)
+        }
     }
 }

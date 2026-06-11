@@ -5,7 +5,7 @@ mod fixtures;
 
 use fixtures::{Flat, with_handle};
 use rabex_cli::cli::Format;
-use rabex_cli::commands::{ls, obj};
+use rabex_cli::commands::file;
 
 const PATH: &str = "level0";
 
@@ -15,7 +15,7 @@ fn ls_lists_every_object() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        ls::list(file, None, &mut out).unwrap();
+        file::list(file, None, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         // Two GameObjects + two Transforms.
@@ -40,7 +40,7 @@ fn ls_type_filter_matches_exact_class() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        ls::list(file, Some("GameObject"), &mut out).unwrap();
+        file::list(file, Some("GameObject"), &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
         assert_eq!(out.lines().count(), 2);
@@ -54,7 +54,7 @@ fn ls_type_filter_unknown_class_is_empty() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        ls::list(file, Some("Texture2D"), &mut out).unwrap();
+        file::list(file, Some("Texture2D"), &mut out).unwrap();
         assert_eq!(out, b"");
     });
 }
@@ -65,7 +65,7 @@ fn obj_dumps_named_gameobject_as_json() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        obj::dump(file, go_ids[0], Format::Json, &mut out).unwrap();
+        file::dump_path_id(file, go_ids[0], Format::Json, &mut out).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
 
         assert_eq!(value["m_Name"], "Player");
@@ -78,7 +78,7 @@ fn obj_missing_path_id_errors() {
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
-        let err = obj::dump(file, 9999, Format::Json, &mut out).unwrap_err();
+        let err = file::dump_path_id(file, 9999, Format::Json, &mut out).unwrap_err();
         assert!(
             err.to_string().contains("9999"),
             "error should mention the missing id: {err}"
