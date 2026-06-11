@@ -178,6 +178,15 @@ fn objects_outside_hierarchy<R: EnvResolver, P: TypeTreeProvider>(
     Ok(file.file.objects().len().saturating_sub(covered.len()))
 }
 
+/// Single-quote a name containing spaces, so it can be copied into a shell.
+fn quote_if_spaced(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.contains(' ') {
+        std::borrow::Cow::Owned(format!("'{name}'"))
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
 fn print_node<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     transform: &Transform,
@@ -190,7 +199,7 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
         out,
         "{}{}  #{}",
         "  ".repeat(depth),
-        go.m_Name,
+        quote_if_spaced(&go.m_Name),
         transform.m_GameObject.m_PathID
     )?;
 

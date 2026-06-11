@@ -96,6 +96,19 @@ fn tree_lists_roots_at_depth_zero() {
 }
 
 #[test]
+fn tree_quotes_names_with_spaces() {
+    let (bytes, go_ids) = Flat::new(&["Main Camera"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        file::tree(file, None, Components::None, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        assert_eq!(out, format!("'Main Camera'  #{}\n", go_ids[0]));
+    });
+}
+
+#[test]
 fn tree_scoped_to_a_root_path() {
     let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
 
