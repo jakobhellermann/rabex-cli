@@ -73,6 +73,27 @@ fn obj_dumps_named_gameobject_as_json() {
 }
 
 #[test]
+fn tree_lists_roots_at_depth_zero() {
+    let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        file::tree(file, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        // A flat scene: every GameObject is a root, none indented.
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                format!("Player  #{}", go_ids[0]),
+                format!("Camera  #{}", go_ids[1]),
+            ]
+        );
+    });
+}
+
+#[test]
 fn obj_missing_path_id_errors() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 

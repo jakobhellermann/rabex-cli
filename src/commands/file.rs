@@ -3,11 +3,12 @@
 
 use std::io::Write;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
+use rabex_env::unity::types::Transform;
 
 use crate::cli::{FileVerb, Format, ObjArgs};
 
@@ -21,7 +22,7 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
         FileVerb::Info => info(file, &mut out),
         FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
         FileVerb::Obj(args) => dump(file, args, &mut out),
-        FileVerb::Tree => bail!("`tree` is not implemented yet"),
+        FileVerb::Tree => tree(file, &mut out),
     }
 }
 
@@ -95,6 +96,40 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
             serde_json::to_writer_pretty(&mut *out, &value)?;
             writeln!(out)?;
         }
+    }
+    Ok(())
+}
+
+/// Print the GameObject hierarchy: each root transform (no parent) and its
+/// children recursively, indented by depth. Names come from each transform's
+/// GameObject; the GameObject path id is shown for `obj` follow-up.
+pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    out: &mut impl Write,
+) -> Result<()> {
+    for transform in file.transforms() {
+        let transform = transform.read()?;
+        if transform.m_Father.optional().is_some() {
+            continue;
+        }
+        print_node(file, &transform, 0, out)?;
+    }
+    Ok(())
+}
+
+fn print_node<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    transform: &Transform,
+    depth: usize,
+    out: &mut impl Write,
+) -> Result<()> {
+    let go = transform.m_GameObject;
+    let name = file.deref_read(go)?.m_Name;
+    writeln!(out, "{}{}  #{}", "  ".repeat(depth), name, go.m_PathID)?;
+
+    for child in &transform.m_Children {
+        let child = file.deref_read(*child)?;
+        print_node(file, &child, depth + 1, out)?;
     }
     Ok(())
 }
