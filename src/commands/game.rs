@@ -46,8 +46,10 @@ pub fn ls(env: &Environment) -> Result<()> {
     Ok(())
 }
 
-/// Look up an addressables key in the catalog and print its location(s): the
-/// provider, internal id, type, and the bundle the asset lives in.
+/// Look up an addressables key in the catalog and print the location(s) it maps
+/// to — the same set `Addressables.Load*(key)` would resolve. A key can map to
+/// several assets (it may be a label), so each is listed with its type,
+/// internal id and bundle.
 pub fn addressable(env: &Environment, key: &str) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -57,29 +59,32 @@ pub fn addressable(env: &Environment, key: &str) -> Result<()> {
         .context("this game has no addressables")?;
     let build_folder = addressables.build_folder();
 
-    let mut found = false;
+    // The catalog maps a key to a list of locations; that — not the per-location
+    // `primary_key`, which isn't unique — is what the key resolves to.
+    let mut locations = Vec::new();
     for mut catalog in addressables.catalogs(&env.game_files)? {
         let catalog = catalog.read()?;
-        for loc in catalog.locations() {
-            if loc.primary_key.as_str() != key {
-                continue;
-            }
-            found = true;
-            writeln!(out, "{}", loc.primary_key)?;
-            writeln!(out, "  provider: {}", loc.provider_name())?;
-            writeln!(
-                out,
-                "  internal id: {}",
-                addressables.evaluate_string(&loc.internal_id)
-            )?;
-            writeln!(out, "  type: {}", loc.type_.m_ClassName)?;
-            if let Some(bundle) = location_bundle(addressables, loc, &build_folder) {
-                writeln!(out, "  bundle: {}", bundle.display())?;
-            }
+        if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
+            locations.extend(locs.iter().cloned());
         }
     }
-    if !found {
+    if locations.is_empty() {
         bail!("no addressable with key '{key}'");
+    }
+
+    let noun = if locations.len() == 1 {
+        "location"
+    } else {
+        "locations"
+    };
+    writeln!(out, "{key}  ({} {noun})", locations.len())?;
+    for loc in &locations {
+        let internal_id = addressables.evaluate_string(&loc.internal_id);
+        let bundle = match location_bundle(addressables, loc, &build_folder) {
+            Some(bundle) => format!("  [{}]", bundle.display()),
+            None => String::new(),
+        };
+        writeln!(out, "  {}  {internal_id}{bundle}", loc.type_.class_name())?;
     }
     Ok(())
 }
