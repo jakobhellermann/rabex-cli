@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
 use rabex_env::env::Data;
-use rabex_env::game_files::{GameFiles, LevelFiles};
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
 use rabex_env::rabex::files::serializedfile::SerializedFile;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
-use rabex_env::resolver::EnvResolver as _;
+use rabex_env::resolver::game_files::LevelFiles;
+use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::TargetArgs;
 use crate::target::Target;
