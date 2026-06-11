@@ -1,16 +1,16 @@
 //! Steam game location, adapted from unity-scene-repacker.
 
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use rabex_env::resolver::GameFiles;
 
 fn search_transform(input: &str) -> String {
     input.to_ascii_lowercase().replace(char::is_whitespace, "")
 }
 
 /// Locate a steam-installed unity game by name (fuzzy) or numeric app id,
-/// returning its `*_Data` directory.
+/// returning its install directory.
 pub fn locate_steam_game(game: &str) -> Result<PathBuf> {
     let steam = steamlocate::SteamDir::locate()?;
     let needle = search_transform(game);
@@ -43,26 +43,7 @@ pub fn locate_steam_game(game: &str) -> Result<PathBuf> {
 
     let install_dir = library.resolve_app_dir(&app);
     let name = app.name.as_ref().unwrap_or(&app.install_dir);
-    find_unity_data_dir(&install_dir)?.with_context(|| {
-        format!(
-            "'{}' has no unity `*_Data` directory at {}",
-            name,
-            install_dir.display()
-        )
-    })
-}
-
-/// The first `*_Data` directory directly under `install_dir`, if any.
-pub fn find_unity_data_dir(install_dir: &Path) -> Result<Option<PathBuf>> {
-    Ok(std::fs::read_dir(install_dir)?
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry
-                .path()
-                .file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| name.ends_with("_Data"))
-                && entry.file_type().is_ok_and(|ty| ty.is_dir())
-        })
-        .map(|entry| entry.path()))
+    GameFiles::probe_dir(&install_dir)
+        .with_context(|| format!("'{name}' is not a unity game at {}", install_dir.display()))?;
+    Ok(install_dir)
 }

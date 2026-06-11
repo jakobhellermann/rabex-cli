@@ -7,11 +7,10 @@
 use anyhow::Result;
 use clap::{CommandFactory as _, FromArgMatches as _};
 use clap_complete::CompletionCandidate;
-use rabex_env::resolver::EnvResolver as _;
+use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::{Cli, TargetArgs};
 use crate::ctx::Ctx;
-use crate::locate::find_unity_data_dir;
 
 /// Recover the target-selection flags of the subcommand being completed.
 ///
@@ -110,7 +109,7 @@ pub fn steam_games() -> Vec<CompletionCandidate> {
         for library in steam.libraries()?.filter_map(Result::ok) {
             for app in library.apps().filter_map(Result::ok) {
                 let app_dir = library.resolve_app_dir(&app);
-                if find_unity_data_dir(&app_dir).ok().flatten().is_none() {
+                if GameFiles::probe_dir(&app_dir).is_err() {
                     continue;
                 }
                 let name = app.name.clone().unwrap_or_else(|| app.install_dir.clone());
