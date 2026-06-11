@@ -109,8 +109,8 @@ fn tree_components_lists_each_components() {
 }
 
 #[test]
-fn cat_dumps_gameobject_by_path() {
-    let (bytes, _) = Flat::new(&["Player"]).write();
+fn cat_lists_components_for_gameobject() {
+    let (bytes, go_ids) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
         let mut out = Vec::new();
@@ -119,9 +119,16 @@ fn cat_dumps_gameobject_by_path() {
             format: Format::Json,
         };
         file::cat(file, args, &mut out).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let out = String::from_utf8(out).unwrap();
 
-        assert_eq!(value["m_Name"], "Player");
+        // No @component: list the GameObject's components by name.
+        assert_eq!(
+            out,
+            format!(
+                "Player  #{}  (layer 0, tag 0, active)\n  - Transform\n",
+                go_ids[0]
+            )
+        );
     });
 }
 
@@ -140,6 +147,24 @@ fn cat_dumps_component_by_path() {
 
         // A Transform points back at its GameObject.
         assert!(value.get("m_GameObject").is_some(), "{value}");
+    });
+}
+
+#[test]
+fn dump_qualifies_pptr_with_ref() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let mut out = Vec::new();
+        let args = CatArgs {
+            path: parse_path("Player@Transform").unwrap(),
+            format: Format::Json,
+        };
+        file::cat(file, args, &mut out).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+        // The Transform's m_GameObject PPtr gains a re-cat-able $ref.
+        assert_eq!(value["m_GameObject"]["$ref"], "Player");
     });
 }
 

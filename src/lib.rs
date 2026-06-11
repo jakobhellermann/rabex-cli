@@ -3,6 +3,7 @@ pub mod complete;
 pub mod component_path;
 pub mod ctx;
 pub mod locate;
+pub mod qualify;
 pub mod commands {
     pub mod bundle;
     pub mod file;

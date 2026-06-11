@@ -13,6 +13,8 @@
 //! selector := name (':' index)?
 //! ```
 
+use std::fmt;
+
 /// A reference to a GameObject (by hierarchy path) and optionally a component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentPath {
@@ -27,6 +29,45 @@ pub struct ComponentPath {
 pub struct Field {
     pub name: String,
     pub index: Option<usize>,
+}
+
+/// `Display` is the inverse of [`parse`]: it escapes structural characters so
+/// the output round-trips back through `parse`.
+impl fmt::Display for ComponentPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, segment) in self.segments.iter().enumerate() {
+            if i > 0 {
+                f.write_str("/")?;
+            }
+            write!(f, "{segment}")?;
+        }
+        if let Some(component) = &self.component {
+            write!(f, "@{component}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Field {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&escape(&self.name))?;
+        if let Some(index) = self.index {
+            write!(f, ":{index}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Backslash-escape the structural characters so a name round-trips.
+fn escape(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '\\' | '/' | '@' | ':') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Parse a [`ComponentPath`]. Shaped as `fn(&str) -> Result<_, String>` so it
@@ -180,6 +221,19 @@ mod tests {
                 component: None,
             }
         );
+    }
+
+    #[test]
+    fn display_roundtrips_through_parse() {
+        for s in [
+            "Root/Child",
+            "Object/Path@SpriteRenderer",
+            "Path/To:3@FsmStateMachine:6",
+            r"weird\:name@Comp",
+            r"a\/b\@c",
+        ] {
+            assert_eq!(parse(s).unwrap().to_string(), s);
+        }
     }
 
     #[test]

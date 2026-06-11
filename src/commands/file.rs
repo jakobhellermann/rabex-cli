@@ -92,7 +92,9 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     out: &mut impl Write,
 ) -> Result<()> {
     let object = file.object_at::<serde_json::Value>(path_id)?;
-    let value = object.read()?;
+    let mut value = object.read()?;
+    // Annotate PPtrs with a re-`cat`-able `$ref` component path.
+    crate::qualify::qualify(file, &mut value);
 
     match format {
         Format::Json => {
@@ -157,7 +159,7 @@ fn print_node<R: EnvResolver, P: TypeTreeProvider>(
 }
 
 /// A component's class name, or the script's class name for a MonoBehaviour.
-fn component_label<R: EnvResolver, P: TypeTreeProvider>(
+pub(crate) fn component_label<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     component: PPtr,
 ) -> Result<String> {
@@ -170,22 +172,50 @@ fn component_label<R: EnvResolver, P: TypeTreeProvider>(
     Ok(format!("{:?}", handle.class_id()))
 }
 
-/// Resolve a [`ComponentPath`] to an object and dump it like [`dump`].
+/// `cat` a [`ComponentPath`]: with a `@component` selector, dump that component
+/// as JSON; without one, list the GameObject's components by name.
 pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     args: CatArgs,
     out: &mut impl Write,
 ) -> Result<()> {
-    let path_id = resolve(file, &args.path)?;
-    dump_path_id(file, path_id, args.format, out)
+    let transform = resolve_path(file, &args.path)?;
+    let go = file.deref_read(transform.m_GameObject)?;
+
+    match &args.path.component {
+        // A GameObject's raw struct is just component pointers; the useful view
+        // is the named component list (the discovery step before `@component`).
+        None => {
+            let active = if go.m_IsActive { "active" } else { "inactive" };
+            writeln!(
+                out,
+                "{}  #{}  (layer {}, tag {}, {})",
+                go.m_Name, transform.m_GameObject.m_PathID, go.m_Layer, go.m_Tag, active
+            )?;
+            for pair in &go.m_Component {
+                writeln!(out, "  - {}", component_label(file, pair.component)?)?;
+            }
+            Ok(())
+        }
+        Some(selector) => {
+            let mut matches = Vec::new();
+            for pair in &go.m_Component {
+                if component_label(file, pair.component)? == selector.name {
+                    matches.push(pair.component.m_PathID);
+                }
+            }
+            let path_id = pick(matches, selector, "component")?;
+            dump_path_id(file, path_id, args.format, out)
+        }
+    }
 }
 
-/// Walk the hierarchy described by `path` and return the path id of the target
-/// component (or the GameObject itself when no component is selected).
-fn resolve<R: EnvResolver, P: TypeTreeProvider>(
+/// Walk the hierarchy described by `path`'s segments to the target GameObject's
+/// transform.
+fn resolve_path<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path: &ComponentPath,
-) -> Result<PathId> {
+) -> Result<Transform> {
     let mut roots = Vec::new();
     for transform in file.transforms() {
         let transform = transform.read()?;
@@ -204,20 +234,7 @@ fn resolve<R: EnvResolver, P: TypeTreeProvider>(
             .collect::<Result<Vec<_>>>()?;
         current = pick_transform(file, children, segment, "child object")?;
     }
-
-    match &path.component {
-        None => Ok(current.m_GameObject.m_PathID),
-        Some(selector) => {
-            let go = file.deref_read(current.m_GameObject)?;
-            let mut matches = Vec::new();
-            for pair in &go.m_Component {
-                if component_label(file, pair.component)? == selector.name {
-                    matches.push(pair.component.m_PathID);
-                }
-            }
-            pick(matches, selector, "component")
-        }
-    }
+    Ok(current)
 }
 
 /// Pick the transform whose GameObject name matches `field` from `transforms`.
