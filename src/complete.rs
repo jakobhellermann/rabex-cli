@@ -142,30 +142,13 @@ pub fn bundle_files() -> Result<Vec<CompletionCandidate>> {
     Ok(paths_to_candidates(env.addressables_bundles()?))
 }
 
-/// Candidates for `addressable <KEY>`: every catalog key, with the distinct
+/// Candidates for `addressable info <KEY>`: every catalog key, with the distinct
 /// asset types it resolves to as help text (e.g. `AtmosCue, MusicCue`).
 pub fn addressable_keys() -> Result<Vec<CompletionCandidate>> {
-    use std::collections::{BTreeMap, BTreeSet};
-
     let Some(env) = current_game_env()? else {
         return Ok(Vec::new());
     };
-    let Some(addressables) = env.addressables()? else {
-        return Ok(Vec::new());
-    };
-
-    let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for mut catalog in addressables.catalogs(&env.game_files)? {
-        let catalog = catalog.read()?;
-        for (key, locations) in &catalog.resources {
-            let types = keys.entry(key.to_string()).or_default();
-            for loc in locations {
-                types.insert(loc.type_.class_name().to_owned());
-            }
-        }
-    }
-
-    Ok(keys
+    Ok(ctx::addressable_keys(&env)?
         .into_iter()
         .map(|(key, types)| {
             let help = types.into_iter().collect::<Vec<_>>().join(", ");

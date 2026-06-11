@@ -41,7 +41,7 @@ pub enum Command {
     Ls,
     /// List scenes (build settings + addressables).
     Scenes,
-    /// Look up an addressables key (its catalog location and bundle).
+    /// Inspect addressables: catalog stats, or look up a key.
     #[command(visible_alias = "aa")]
     Addressable(AddressableArgs),
     /// Inspect asset bundles (no path: list all bundles).
@@ -54,6 +54,22 @@ pub enum Command {
 
 #[derive(Args)]
 pub struct AddressableArgs {
+    #[command(subcommand)]
+    pub command: AddressableCmd,
+}
+
+#[derive(Subcommand)]
+pub enum AddressableCmd {
+    /// Catalog overview: counts and breakdowns by provider/type.
+    Stats,
+    /// List every key with the asset type(s) it resolves to.
+    Ls,
+    /// Look up a key's location(s), bundle and dependency count.
+    Info(AddressableInfoArgs),
+}
+
+#[derive(Args)]
+pub struct AddressableInfoArgs {
     /// Addressables key/address (e.g. `_GameCameras`, `Scenes/Menu_Title`).
     #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
     pub key: String,

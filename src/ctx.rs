@@ -191,6 +191,24 @@ pub fn open_scene<'a>(env: &'a Environment, name: &str) -> Result<SerializedFile
     }
 }
 
+/// Every addressables key mapped to the distinct asset type names it resolves
+/// to (e.g. `AreaAbyss` → {`AtmosCue`, `MusicCue`}). Empty without addressables.
+pub fn addressable_keys(env: &Environment) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if let Some(addressables) = env.addressables()? {
+        for mut catalog in addressables.catalogs(&env.game_files)? {
+            let catalog = catalog.read()?;
+            for (key, locations) in &catalog.resources {
+                let types = keys.entry(key.to_string()).or_default();
+                for loc in locations {
+                    types.insert(loc.type_.class_name().to_owned());
+                }
+            }
+        }
+    }
+    Ok(keys)
+}
+
 /// All scenes: built-in scenes (from `BuildSettings`, in build order) followed
 /// by addressables scenes (deduped, sorted), each tagged with its source.
 pub fn scenes(env: &Environment) -> Result<Vec<Scene>> {

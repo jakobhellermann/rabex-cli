@@ -46,11 +46,81 @@ pub fn ls(env: &Environment) -> Result<()> {
     Ok(())
 }
 
+/// Catalog overview: counts plus a breakdown of locations by provider and type.
+pub fn addressable_stats(env: &Environment) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let addressables = env
+        .addressables()?
+        .context("this game has no addressables")?;
+
+    let mut catalogs = 0usize;
+    let mut keys = 0usize;
+    let mut refs = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    let mut by_provider: std::collections::HashMap<String, usize> = Default::default();
+    let mut by_type: std::collections::HashMap<String, usize> = Default::default();
+
+    for mut catalog in addressables.catalogs(&env.game_files)? {
+        catalogs += 1;
+        let catalog = catalog.read()?;
+        keys += catalog.resources.len();
+        for loc in catalog.locations() {
+            refs += 1;
+            if seen.insert(loc as *const ResourceLocation) {
+                *by_provider
+                    .entry(loc.provider_name().to_owned())
+                    .or_default() += 1;
+                *by_type
+                    .entry(loc.type_.class_name().to_owned())
+                    .or_default() += 1;
+            }
+        }
+    }
+
+    writeln!(out, "addressables")?;
+    writeln!(out, "  catalogs:  {catalogs}")?;
+    writeln!(out, "  keys:      {keys}")?;
+    writeln!(out, "  locations: {} ({refs} refs)", seen.len())?;
+    writeln!(out, "  bundles:   {}", addressables.bundle_paths().count())?;
+    write_breakdown(&mut out, "by provider", by_provider)?;
+    write_breakdown(&mut out, "by type", by_type)?;
+    Ok(())
+}
+
+/// Print a `name → count` map under a heading, sorted by count descending.
+fn write_breakdown(
+    out: &mut impl Write,
+    heading: &str,
+    counts: std::collections::HashMap<String, usize>,
+) -> Result<()> {
+    let mut entries: Vec<_> = counts.into_iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    writeln!(out)?;
+    writeln!(out, "  {heading}:")?;
+    for (name, count) in entries {
+        writeln!(out, "    {count:>6}  {name}")?;
+    }
+    Ok(())
+}
+
+/// List every addressables key with the asset type(s) it resolves to.
+pub fn addressable_ls(env: &Environment) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for (key, types) in ctx::addressable_keys(env)? {
+        let types = types.into_iter().collect::<Vec<_>>().join(", ");
+        writeln!(out, "{key}  ({types})")?;
+    }
+    Ok(())
+}
+
 /// Look up an addressables key in the catalog and print the location(s) it maps
 /// to — the same set `Addressables.Load*(key)` would resolve. A key can map to
 /// several assets (it may be a label), so each is listed with its type,
 /// internal id and bundle.
-pub fn addressable(env: &Environment, key: &str, list_deps: bool) -> Result<()> {
+pub fn addressable_info(env: &Environment, key: &str, list_deps: bool) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
