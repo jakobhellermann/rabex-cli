@@ -4,10 +4,10 @@
 mod fixtures;
 
 use fixtures::{Flat, with_handle};
-use rabex_cli::cli::{CatArgs, Format};
+use rabex_cli::cli::Format;
 use rabex_cli::commands::file;
 use rabex_cli::commands::file::Components;
-use rabex_cli::component_path::parse as parse_path;
+use rabex_cli::component_path::{parse as parse_path, parse_object_ref};
 
 const PATH: &str = "level0";
 
@@ -153,20 +153,17 @@ fn tree_scripts_prunes_gameobjects_without_scripts() {
 }
 
 #[test]
-fn cat_dumps_gameobject_as_json() {
+fn cat_dumps_gameobject_by_path() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
+        let path_id = file::resolve_object_ref(file, &parse_object_ref("Player").unwrap()).unwrap();
         let mut out = Vec::new();
-        let args = CatArgs {
-            path: parse_path("Player").unwrap(),
-            format: Format::Json,
-        };
-        file::cat(file, args, &mut out).unwrap();
+        file::dump_path_id(file, path_id, Format::Json, &mut out).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
 
-        // No @component: dump the GameObject; its sole component is the Transform,
-        // whose PPtr gains a re-cat-able $ref.
+        // The GameObject's sole component is the Transform, whose PPtr gains a
+        // re-cat-able $ref.
         assert_eq!(value["m_Name"], "Player");
         assert_eq!(
             value["m_Component"][0]["component"]["$ref"],
@@ -180,33 +177,13 @@ fn cat_dumps_component_by_path() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
+        let path_id =
+            file::resolve_object_ref(file, &parse_object_ref("Player@Transform").unwrap()).unwrap();
         let mut out = Vec::new();
-        let args = CatArgs {
-            path: parse_path("Player@Transform").unwrap(),
-            format: Format::Json,
-        };
-        file::cat(file, args, &mut out).unwrap();
+        file::dump_path_id(file, path_id, Format::Json, &mut out).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
 
-        // A Transform points back at its GameObject.
-        assert!(value.get("m_GameObject").is_some(), "{value}");
-    });
-}
-
-#[test]
-fn dump_qualifies_pptr_with_ref() {
-    let (bytes, _) = Flat::new(&["Player"]).write();
-
-    with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        let args = CatArgs {
-            path: parse_path("Player@Transform").unwrap(),
-            format: Format::Json,
-        };
-        file::cat(file, args, &mut out).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
-
-        // The Transform's m_GameObject PPtr gains a re-cat-able $ref.
+        // A Transform points back at its GameObject, with a $ref.
         assert_eq!(value["m_GameObject"]["$ref"], "Player");
     });
 }
@@ -216,12 +193,7 @@ fn cat_missing_path_errors() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        let args = CatArgs {
-            path: parse_path("Nope").unwrap(),
-            format: Format::Json,
-        };
-        let err = file::cat(file, args, &mut out).unwrap_err();
+        let err = file::resolve_object_ref(file, &parse_object_ref("Nope").unwrap()).unwrap_err();
         assert!(err.to_string().contains("Nope"), "{err}");
     });
 }

@@ -1,41 +1,32 @@
-//! The `bundle` command: list all bundles, or inspect one bundle's contents
-//! and drill into a contained serialized file.
+//! The `bundle` command: inspect one bundle's contents and drill into a
+//! contained serialized file. (`bundles` lists all bundles.)
 
 use std::io::{Cursor, Write};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+use rabex_env::Environment;
 use rabex_env::env::Data;
 use rabex_env::rabex::files::bundlefile::BundleFileReader;
 use rabex_env::rabex::files::unityfile::FileEntry;
 
-use crate::cli::{BundleArgs, BundleVerb, GameArgs};
+use crate::cli::{BundleArgs, BundleVerb, Context};
 use crate::commands::file;
 use crate::ctx;
 
-pub fn run(game: &GameArgs, args: BundleArgs) -> Result<()> {
-    match args.path {
-        // No path: list all bundles in the game.
-        None => match args.verb {
-            None | Some(BundleVerb::Ls) => list_all(game),
-            Some(_) => bail!("no bundle path given (use `bundle <path> …`)"),
-        },
-        Some(path) => {
-            let (env, bundle) = ctx::open_bundle(game, &path)?;
-            match args.verb {
-                None | Some(BundleVerb::Ls) => list_files(&bundle),
-                Some(BundleVerb::Info) => info(&bundle),
-                Some(BundleVerb::File(file_args)) => {
-                    let handle = ctx::bundle_serialized(&env, &bundle, Some(&file_args.cab))?;
-                    file::run(&handle, file_args.verb)
-                }
-            }
+pub fn run(game: &Context, args: BundleArgs) -> Result<()> {
+    let (env, bundle) = ctx::open_bundle(game, &args.path)?;
+    match args.verb {
+        BundleVerb::Info => info(&bundle),
+        BundleVerb::Files => list_files(&bundle),
+        BundleVerb::File(file_args) => {
+            let handle = ctx::bundle_serialized(&env, &bundle, Some(&file_args.cab))?;
+            file::run_verb(&handle, file_args.verb)
         }
     }
 }
 
-/// List every addressables bundle in the game.
-fn list_all(game: &GameArgs) -> Result<()> {
-    let env = ctx::require_game_env(game)?;
+/// List every addressables bundle in the game (`bundles`).
+pub fn list_all(env: &Environment) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for bundle in env.addressables_bundles()? {
@@ -44,7 +35,7 @@ fn list_all(game: &GameArgs) -> Result<()> {
     Ok(())
 }
 
-/// List the files contained in a bundle.
+/// List the files (CABs) contained in a bundle.
 fn list_files(bundle: &BundleFileReader<Cursor<Data>>) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

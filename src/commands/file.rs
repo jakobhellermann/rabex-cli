@@ -11,10 +11,12 @@ use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::Transform;
 
-use crate::cli::{CatArgs, FileVerb, Format, ObjArgs};
-use crate::component_path::{ComponentPath, Field};
+use crate::cli::{FileVerb, Format, ObjectVerb};
+use crate::component_path::{ComponentPath, Field, ObjectRef};
 
-pub fn run<R: EnvResolver, P: TypeTreeProvider>(
+/// Run a [`FileVerb`] against a resolved serialized file. Shared by the
+/// `scene`, `file` and `bundle <path> file <cab>` commands.
+pub fn run_verb<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     verb: FileVerb,
 ) -> Result<()> {
@@ -22,9 +24,6 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
     let mut out = stdout.lock();
     match verb {
         FileVerb::Info => info(file, &mut out),
-        FileVerb::Ls(args) => list(file, args.r#type.as_deref(), &mut out),
-        FileVerb::Obj(args) => dump(file, args, &mut out),
-        FileVerb::Cat(args) => cat(file, args, &mut out),
         FileVerb::Tree(args) => {
             let components = match (args.components, args.scripts) {
                 (_, true) => Components::Scripts,
@@ -32,6 +31,14 @@ pub fn run<R: EnvResolver, P: TypeTreeProvider>(
                 _ => Components::None,
             };
             tree(file, args.path, components, &mut out)
+        }
+        FileVerb::Objects(args) => list(file, args.r#type.as_deref(), &mut out),
+        FileVerb::Object(args) => {
+            let path_id = resolve_object_ref(file, &args.reference)?;
+            match args.verb {
+                ObjectVerb::Info => object_info(file, path_id, &mut out),
+                ObjectVerb::Cat(cat) => dump_path_id(file, path_id, cat.format, &mut out),
+            }
         }
     }
 }
@@ -94,15 +101,6 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
 }
 
 /// Read object `path_id` via its typetree and write it in the requested format.
-pub fn dump<R: EnvResolver, P: TypeTreeProvider>(
-    file: &SerializedFileHandle<'_, R, P>,
-    args: ObjArgs,
-    out: &mut impl Write,
-) -> Result<()> {
-    dump_path_id(file, args.path_id, args.format, out)
-}
-
-/// As [`dump`], by raw path id — convenient for tests.
 pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
@@ -260,20 +258,27 @@ fn component_class_and_label<R: EnvResolver, P: TypeTreeProvider>(
     Ok((class_id, format!("{class_id:?}")))
 }
 
-/// `cat` a [`ComponentPath`]: dump the selected component as JSON, or the
-/// GameObject itself when no `@component` is given. PPtrs in the output carry a
-/// `$ref` (see [`dump_path_id`]), so a GameObject's `m_Component` lists its
-/// components by path.
-pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
+/// Resolve an object reference (raw path id or component path) to a path id.
+pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
-    args: CatArgs,
-    out: &mut impl Write,
-) -> Result<()> {
-    let transform = resolve_path(file, &args.path)?;
-    let go = file.deref_read(transform.m_GameObject)?;
+    reference: &ObjectRef,
+) -> Result<PathId> {
+    match reference {
+        ObjectRef::PathId(path_id) => Ok(*path_id),
+        ObjectRef::Path(path) => resolve_component_path(file, path),
+    }
+}
 
-    let path_id = match &args.path.component {
-        None => transform.m_GameObject.m_PathID,
+/// Resolve a [`ComponentPath`] to the path id of its GameObject, or of the
+/// selected `@component` on it.
+fn resolve_component_path<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path: &ComponentPath,
+) -> Result<PathId> {
+    let transform = resolve_path(file, path)?;
+    let go = file.deref_read(transform.m_GameObject)?;
+    match &path.component {
+        None => Ok(transform.m_GameObject.m_PathID),
         Some(selector) => {
             let mut matches = Vec::new();
             for pair in &go.m_Component {
@@ -281,10 +286,33 @@ pub fn cat<R: EnvResolver, P: TypeTreeProvider>(
                     matches.push(pair.component.m_PathID);
                 }
             }
-            pick(matches, selector, "component")?
+            pick(matches, selector, "component")
         }
-    };
-    dump_path_id(file, path_id, args.format, out)
+    }
+}
+
+/// Summary of an object: its class (script name for a MonoBehaviour) and, if
+/// present, its `m_Name`.
+pub fn object_info<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (class_id, label) = component_class_and_label(file, PPtr::local(path_id))?;
+    writeln!(out, "  {:<9}{path_id}", "path id:")?;
+    writeln!(out, "  {:<9}{class_id:?}", "class:")?;
+    if label != format!("{class_id:?}") {
+        writeln!(out, "  {:<9}{label}", "script:")?;
+    }
+    if let Ok(value) = file
+        .object_at::<serde_json::Value>(path_id)
+        .and_then(|o| o.read())
+        && let Some(name) = value.get("m_Name").and_then(|n| n.as_str())
+        && !name.is_empty()
+    {
+        writeln!(out, "  {:<9}{name}", "name:")?;
+    }
+    Ok(())
 }
 
 /// Walk the hierarchy described by `path`'s segments to the target GameObject's

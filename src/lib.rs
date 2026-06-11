@@ -12,36 +12,49 @@ pub mod commands {
 
 use anyhow::Result;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{AddressableVerb, AddressablesVerb, Command, GameVerb};
 
 /// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: crate::cli::Cli) -> Result<()> {
     let game = &cli.game;
 
     match cli.command {
-        Command::Info => commands::game::info(&ctx::require_game_env(game)?),
-        Command::Ls => commands::game::ls(&ctx::require_game_env(game)?),
-        Command::Scenes => commands::game::scenes(&ctx::require_game_env(game)?),
+        // Game summary.
+        Command::Game(args) => match args.verb.unwrap_or(GameVerb::Info) {
+            GameVerb::Info => commands::game::info(&ctx::require_game_env(game)?),
+        },
+
+        // Collections (plural). Bare and `list` both list.
+        Command::Scenes(_) => commands::game::scenes(&ctx::require_game_env(game)?),
+        Command::Files(_) => commands::game::ls(&ctx::require_game_env(game)?),
+        Command::Bundles(_) => commands::bundle::list_all(&ctx::require_game_env(game)?),
         Command::Addressables(args) => {
             let env = ctx::require_game_env(game)?;
-            match args.command {
-                cli::AddressablesCmd::Stats => commands::game::addressable_stats(&env),
-                cli::AddressablesCmd::Ls => commands::game::addressable_ls(&env),
-                cli::AddressablesCmd::Info(info) => {
-                    commands::game::addressable_info(&env, &info.key, info.dependencies)
-                }
+            match args.verb.unwrap_or(AddressablesVerb::List) {
+                AddressablesVerb::List => commands::game::addressable_ls(&env),
+                AddressablesVerb::Stats => commands::game::addressable_stats(&env),
             }
         }
-        Command::Bundle(args) => commands::bundle::run(game, args),
-        Command::File(args) => {
-            let (env, relative) = ctx::open_file(game, &args.path)?;
-            let handle = env.load_serialized(&relative)?;
-            commands::file::run(&handle, args.verb)
-        }
+
+        // Items (singular): select then run a verb.
         Command::Scene(args) => {
             let env = ctx::require_game_env(game)?;
             let handle = ctx::open_scene(&env, &args.name)?;
-            commands::file::run(&handle, args.verb)
+            commands::file::run_verb(&handle, args.verb)
+        }
+        Command::File(args) => {
+            let (env, relative) = ctx::open_file(game, &args.path)?;
+            let handle = env.load_serialized(&relative)?;
+            commands::file::run_verb(&handle, args.verb)
+        }
+        Command::Bundle(args) => commands::bundle::run(game, args),
+        Command::Addressable(args) => {
+            let env = ctx::require_game_env(game)?;
+            match args.verb {
+                AddressableVerb::Info(info) => {
+                    commands::game::addressable_info(&env, &args.key, info.dependencies)
+                }
+            }
         }
     }
 }

@@ -31,6 +31,23 @@ pub struct Field {
     pub index: Option<usize>,
 }
 
+/// How an object is addressed on the command line: by raw path id, or by a
+/// hierarchy/component path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectRef {
+    PathId(i64),
+    Path(ComponentPath),
+}
+
+/// Parse an [`ObjectRef`]: a bare integer is a path id, anything else a
+/// [`ComponentPath`]. Shaped for use as a clap `value_parser`.
+pub fn parse_object_ref(input: &str) -> Result<ObjectRef, String> {
+    match input.parse::<i64>() {
+        Ok(path_id) => Ok(ObjectRef::PathId(path_id)),
+        Err(_) => Ok(ObjectRef::Path(parse(input)?)),
+    }
+}
+
 /// `Display` is the inverse of [`parse`]: it escapes structural characters so
 /// the output round-trips back through `parse`.
 impl fmt::Display for ComponentPath {

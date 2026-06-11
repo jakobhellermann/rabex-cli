@@ -18,7 +18,7 @@ use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::game_files::LevelFiles;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
-use crate::cli::GameArgs;
+use crate::cli::Context;
 use crate::locate::locate_steam_game;
 
 const SCENE_INSTANCE_CLASS: &str = "UnityEngine.ResourceManagement.ResourceProviders.SceneInstance";
@@ -29,7 +29,7 @@ pub fn tpk() -> TypeTreeCache<TpkTypeTreeBlob> {
 
 /// The game directory from the context flags, or — when none are given — a
 /// unity game discovered at or above the current working directory.
-fn game_dir(game: &GameArgs) -> Result<Option<PathBuf>> {
+fn game_dir(game: &Context) -> Result<Option<PathBuf>> {
     match (&game.steam_game, &game.game_dir) {
         (Some(name), _) => Ok(Some(locate_steam_game(name)?)),
         (None, Some(dir)) => Ok(Some(dir.clone())),
@@ -47,7 +47,7 @@ fn game_from_cwd() -> Option<PathBuf> {
 }
 
 /// The game [`Environment`], if a context was given.
-pub fn game_env(game: &GameArgs) -> Result<Option<Environment>> {
+pub fn game_env(game: &Context) -> Result<Option<Environment>> {
     let Some(dir) = game_dir(game)? else {
         return Ok(None);
     };
@@ -57,7 +57,7 @@ pub fn game_env(game: &GameArgs) -> Result<Option<Environment>> {
 }
 
 /// The game [`Environment`]; errors if no context was given.
-pub fn require_game_env(game: &GameArgs) -> Result<Environment> {
+pub fn require_game_env(game: &Context) -> Result<Environment> {
     game_env(game)?.context(
         "no game: pass --steam-game <name> / --game-dir <dir>, or run inside a game directory",
     )
@@ -91,7 +91,7 @@ fn standalone(path: &Path) -> Result<(Environment, PathBuf)> {
 /// otherwise it is a standalone fs path. Returns the owning `Environment` and
 /// the path relative to its root; the caller builds the handle via
 /// [`Environment::load_serialized`].
-pub fn open_file(game: &GameArgs, path: &Path) -> Result<(Environment, PathBuf)> {
+pub fn open_file(game: &Context, path: &Path) -> Result<(Environment, PathBuf)> {
     match game_env(game)? {
         Some(env) => Ok((env, path.to_owned())),
         None => standalone(path),
@@ -102,7 +102,7 @@ pub fn open_file(game: &GameArgs, path: &Path) -> Result<(Environment, PathBuf)>
 /// (relative to the build folder), otherwise a raw fs path. Returns the owning
 /// `Environment` too, so a contained file can be loaded into a handle.
 pub fn open_bundle(
-    game: &GameArgs,
+    game: &Context,
     path: &Path,
 ) -> Result<(Environment, BundleFileReader<Cursor<Data>>)> {
     match game_env(game)? {

@@ -16,7 +16,7 @@ use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
-use crate::cli::{Cli, GameArgs};
+use crate::cli::{Cli, Context};
 use crate::{ctx, qualify};
 
 /// The concrete handle type the completion helpers operate on.
@@ -38,8 +38,8 @@ fn current_matches() -> Result<ArgMatches> {
 }
 
 /// The game context flags, read from wherever they were typed (they are global).
-fn game_args(matches: &ArgMatches) -> GameArgs {
-    GameArgs {
+fn game_args(matches: &ArgMatches) -> Context {
+    Context {
         steam_game: matches.get_one::<String>("steam_game").cloned(),
         game_dir: matches.get_one::<PathBuf>("game_dir").cloned(),
     }
@@ -59,9 +59,9 @@ fn paths_to_candidates(paths: Vec<PathBuf>) -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// Resolve the serialized file selected on the command line (`file <path>` or
-/// `scene <name>`) and hand its handle to `f`. Returns no candidates when no
-/// such target is present.
+/// Resolve the serialized file selected on the command line and hand its handle
+/// to `f`. Handles `scene <name>`, `file <path>` and `bundle <path> file <cab>`.
+/// Returns no candidates when no such target is present.
 fn with_target_handle(
     f: impl FnOnce(&Handle<'_>) -> Result<Vec<CompletionCandidate>>,
 ) -> Result<Vec<CompletionCandidate>> {
@@ -85,31 +85,41 @@ fn with_target_handle(
             let handle = ctx::open_scene(&env, name)?;
             f(&handle)
         }
+        Some(("bundle", m)) => {
+            let Some(path) = m.get_one::<PathBuf>("path") else {
+                return Ok(Vec::new());
+            };
+            let Some(("file", fm)) = m.subcommand() else {
+                return Ok(Vec::new());
+            };
+            let Some(cab) = fm.get_one::<String>("cab") else {
+                return Ok(Vec::new());
+            };
+            let (env, bundle) = ctx::open_bundle(&game, path)?;
+            let handle = ctx::bundle_serialized(&env, &bundle, Some(cab))?;
+            f(&handle)
+        }
         _ => Ok(Vec::new()),
     }
 }
 
-/// Object path ids of the selected file (for `obj <id>`), labelled with class.
-pub fn path_ids() -> Result<Vec<CompletionCandidate>> {
+/// Object references of the selected file (for `object <ref>`): every path id
+/// (labelled with class) and every component path. The shell filters by prefix.
+pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     with_target_handle(|handle| {
-        Ok(handle
+        let mut candidates: Vec<CompletionCandidate> = handle
             .objects::<()>()
             .map(|obj| {
                 CompletionCandidate::new(obj.path_id().to_string())
                     .help(Some(format!("{:?}", obj.class_id()).into()))
             })
-            .collect())
-    })
-}
-
-/// Every component path of the selected file (for `cat <path>`); the shell
-/// filters by the typed prefix.
-pub fn component_paths() -> Result<Vec<CompletionCandidate>> {
-    with_target_handle(|handle| {
-        Ok(qualify::all_paths(handle)
-            .into_iter()
-            .map(|path| CompletionCandidate::new(path.to_string()))
-            .collect())
+            .collect();
+        candidates.extend(
+            qualify::all_paths(handle)
+                .into_iter()
+                .map(|path| CompletionCandidate::new(path.to_string())),
+        );
+        Ok(candidates)
     })
 }
 

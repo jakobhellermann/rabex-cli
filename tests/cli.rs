@@ -53,18 +53,23 @@ fn rabex() -> Command {
     Command::cargo_bin("rabex").unwrap()
 }
 
+fn stdout_json(assert: &assert_cmd::assert::Assert) -> serde_json::Value {
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    serde_json::from_str(&stdout).unwrap()
+}
+
 // -----------------------------------------------------------------------------
-// file ls
+// file <path> objects / object
 // -----------------------------------------------------------------------------
 
 #[test]
-fn file_ls_lists_objects() {
+fn file_objects_lists_objects() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
 
     rabex()
         .arg("file")
         .arg(&path)
-        .arg("ls")
+        .arg("objects")
         .assert()
         .success()
         .stdout(predicates::str::contains("GameObject").count(2))
@@ -72,41 +77,147 @@ fn file_ls_lists_objects() {
 }
 
 #[test]
-fn file_ls_type_filter() {
+fn file_objects_type_filter() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
 
     rabex()
         .arg("file")
         .arg(&path)
-        .args(["ls", "--type", "GameObject"])
+        .args(["objects", "--type", "GameObject"])
         .assert()
         .success()
         .stdout(predicates::str::contains("GameObject").count(2))
         .stdout(predicates::str::contains("Transform").count(0));
 }
 
-/// `--game-dir DIR file NAME ls` resolves the file relative to the game.
+/// `--game-dir DIR file NAME objects` resolves the file relative to the game.
 #[test]
-fn file_ls_relative_to_game_dir() {
+fn file_objects_relative_to_game_dir() {
     let (_tmp, path, _) = game_with_file("level0", &["Player"]);
     let data_dir = path.parent().unwrap();
 
     rabex()
         .arg("--game-dir")
         .arg(data_dir)
-        .args(["file", "level0", "ls"])
+        .args(["file", "level0", "objects"])
         .assert()
         .success()
         .stdout(predicates::str::contains("GameObject"));
 }
 
+#[test]
+fn file_object_cat_dumps_json() {
+    let (_tmp, path, go_ids) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", &go_ids[0].to_string(), "cat"])
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert_eq!(value["m_Name"], "Player");
+}
+
+/// A negative path id (common in real bundles) must be accepted as the value,
+/// not rejected as an unknown flag. It fails later as "no such object".
+#[test]
+fn file_object_accepts_negative_path_id() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", "-8333449340390664235", "cat"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "negative id should parse as a value, not a flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("8333449340390664235"),
+        "should fail looking up the id: {stderr}"
+    );
+}
+
+#[test]
+fn file_object_missing_id_errors_without_redundancy() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", "9999", "cat"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("9999"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("Caused by"),
+        "error should not be wrapped redundantly: {stderr}"
+    );
+}
+
+/// `object <component-path> cat` resolves by hierarchy path and dumps it.
+#[test]
+fn file_object_cat_by_component_path() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    let assert = rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", "Player@Transform", "cat"])
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert!(value.get("m_GameObject").is_some(), "{value}");
+}
+
+/// A malformed component path is rejected at parse time, before doing any work.
+#[test]
+fn file_object_rejects_bad_index() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", "Player:x", "cat"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("invalid index"));
+}
+
+#[test]
+fn file_info_reports_header() {
+    let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
+
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("serialized file"))
+        .stdout(predicates::str::contains("objects: 4"))
+        .stdout(predicates::str::contains(format!(
+            "unity version: {}",
+            fixtures::TEST_UNITY_VERSION
+        )));
+}
+
 // -----------------------------------------------------------------------------
-// game ls / info
+// collections: files / game
 // -----------------------------------------------------------------------------
 
-/// `ls` on a whole game lists its serialized files.
+/// `files` lists the game's serialized files.
 #[test]
-fn game_ls_lists_serialized_files() {
+fn files_lists_serialized_files() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("Game_Data");
     std::fs::create_dir(&data_dir).unwrap();
@@ -118,7 +229,7 @@ fn game_ls_lists_serialized_files() {
     rabex()
         .arg("--game-dir")
         .arg(&data_dir)
-        .arg("ls")
+        .arg("files")
         .assert()
         .success()
         .stdout(predicates::str::contains("globalgamemanagers"))
@@ -132,13 +243,11 @@ fn game_info_reports_summary() {
     std::fs::create_dir(&data_dir).unwrap();
     let (ggm, _) = Flat::new(&["Player"]).write();
     std::fs::write(data_dir.join("globalgamemanagers"), ggm).unwrap();
-    let (lvl, _) = Flat::new(&["Camera"]).write();
-    std::fs::write(data_dir.join("level0"), lvl).unwrap();
 
     rabex()
         .arg("--game-dir")
         .arg(&data_dir)
-        .arg("info")
+        .args(["game", "info"])
         .assert()
         .success()
         .stdout(predicates::str::contains("game directory"))
@@ -146,8 +255,7 @@ fn game_info_reports_summary() {
         .stdout(predicates::str::contains("addressables:"));
 }
 
-/// With no `--game-dir`/`--steam-game`, the game is detected from the current
-/// working directory.
+/// With no `--game-dir`/`--steam-game`, the game is detected from the cwd.
 #[test]
 fn game_detected_from_current_dir() {
     let tmp = TempDir::new().unwrap();
@@ -158,7 +266,7 @@ fn game_detected_from_current_dir() {
 
     rabex()
         .current_dir(tmp.path())
-        .arg("info")
+        .args(["game", "info"])
         .assert()
         .success()
         .stdout(predicates::str::contains("game directory"));
@@ -168,15 +276,15 @@ fn game_detected_from_current_dir() {
 // bundle
 // -----------------------------------------------------------------------------
 
-/// `bundle <path> ls` lists the bundle's contained files (CABs).
+/// `bundle <path> files` lists the bundle's contained files (CABs).
 #[test]
-fn bundle_ls_lists_files() {
+fn bundle_files_lists_files() {
     let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
 
     rabex()
         .arg("bundle")
         .arg(&path)
-        .arg("ls")
+        .arg("files")
         .assert()
         .success()
         .stdout(predicates::str::contains(BUNDLE_CAB));
@@ -198,30 +306,29 @@ fn bundle_info_lists_entries() {
         .stdout(predicates::str::contains(BUNDLE_CAB));
 }
 
-/// `bundle <path> file <cab> ls` lists the objects in a contained file.
+/// `bundle <path> file <cab> objects` lists the objects in a contained file.
 #[test]
-fn bundle_file_ls_lists_objects() {
+fn bundle_file_objects_lists_objects() {
     let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
 
     rabex()
         .arg("bundle")
         .arg(&path)
-        .args(["file", BUNDLE_CAB, "ls"])
+        .args(["file", BUNDLE_CAB, "objects"])
         .assert()
         .success()
         .stdout(predicates::str::contains("GameObject").count(2));
 }
 
-/// `bundle <path> file <cab> obj <id>` dumps an object from a contained file.
+/// `bundle <path> file <cab> object <id> cat` dumps an object from a CAB.
 #[test]
-fn bundle_file_obj_dumps_json() {
+fn bundle_file_object_cat_dumps_json() {
     let (_tmp, path, go_ids) = standalone_bundle(&["Player"]);
 
     let assert = rabex()
         .arg("bundle")
         .arg(&path)
-        .args(["file", BUNDLE_CAB, "obj"])
-        .arg(go_ids[0].to_string())
+        .args(["file", BUNDLE_CAB, "object", &go_ids[0].to_string(), "cat"])
         .assert()
         .success();
 
@@ -245,141 +352,24 @@ fn bundle_truncated_errors() {
 }
 
 // -----------------------------------------------------------------------------
-// file obj
-// -----------------------------------------------------------------------------
-
-#[test]
-fn file_obj_dumps_json_to_stdout() {
-    let (_tmp, path, go_ids) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("file")
-        .arg(&path)
-        .arg("obj")
-        .arg(go_ids[0].to_string())
-        .assert()
-        .success();
-
-    let value = stdout_json(&assert);
-    assert_eq!(value["m_Name"], "Player");
-}
-
-/// A negative path id (common in real bundles) must be accepted as the value,
-/// not rejected as an unknown flag. It fails later as "no such object", not at
-/// arg parsing.
-#[test]
-fn file_obj_accepts_negative_path_id() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("file")
-        .arg(&path)
-        .args(["obj", "-8333449340390664235"])
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    assert!(
-        !stderr.contains("unexpected argument"),
-        "negative id should parse as a value, not a flag: {stderr}"
-    );
-    assert!(
-        stderr.contains("8333449340390664235"),
-        "should fail looking up the id: {stderr}"
-    );
-}
-
-/// `cat <path>@<component>` resolves a component by hierarchy path and dumps it.
-#[test]
-fn file_cat_dumps_component_by_path() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("file")
-        .arg(&path)
-        .args(["cat", "Player@Transform"])
-        .assert()
-        .success();
-
-    let value = stdout_json(&assert);
-    assert!(value.get("m_GameObject").is_some(), "{value}");
-}
-
-/// A malformed component path is rejected at parse time, before doing any work.
-#[test]
-fn file_cat_rejects_bad_index() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    rabex()
-        .arg("file")
-        .arg(&path)
-        .args(["cat", "Player:x"])
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("invalid index"));
-}
-
-#[test]
-fn file_obj_missing_id_errors_without_redundancy() {
-    let (_tmp, path, _) = standalone_file(&["Player"]);
-
-    let assert = rabex()
-        .arg("file")
-        .arg(&path)
-        .args(["obj", "9999"])
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    assert!(stderr.contains("9999"), "stderr: {stderr}");
-    assert!(
-        !stderr.contains("Caused by"),
-        "error should not be wrapped redundantly: {stderr}"
-    );
-}
-
-// -----------------------------------------------------------------------------
-// file info
-// -----------------------------------------------------------------------------
-
-#[test]
-fn file_info_reports_header() {
-    let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
-
-    rabex()
-        .arg("file")
-        .arg(&path)
-        .arg("info")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("serialized file"))
-        .stdout(predicates::str::contains("objects: 4"))
-        .stdout(predicates::str::contains(format!(
-            "unity version: {}",
-            fixtures::TEST_UNITY_VERSION
-        )));
-}
-
-// -----------------------------------------------------------------------------
-// target resolution
+// context resolution
 // -----------------------------------------------------------------------------
 
 /// A game command without a game context errors clearly.
 #[test]
 fn game_command_without_context_errors() {
     rabex()
-        .arg("info")
+        .args(["game", "info"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("no game"));
 }
 
-/// `bundle` without a path lists all bundles, which needs a game context.
+/// `bundles` (list all) needs a game context.
 #[test]
-fn bundle_ls_without_path_needs_game() {
+fn bundles_without_context_needs_game() {
     rabex()
-        .arg("bundle")
-        .arg("ls")
+        .arg("bundles")
         .assert()
         .failure()
         .stderr(predicates::str::contains("no game"));
@@ -389,29 +379,28 @@ fn bundle_ls_without_path_needs_game() {
 // completion
 // -----------------------------------------------------------------------------
 
-/// Run the binary as the `COMPLETE=fish` shim does, completing the `obj`
-/// path-id slot for `file <path> obj <current>`:
-/// `rabex -- rabex file <path> obj <current-token>`.
-fn complete_obj_path_id(path: &Path, current: &str) -> String {
+/// Run the binary as the `COMPLETE=fish` shim does, completing the `object`
+/// ref slot for `file <path> object <current>`.
+fn complete_object_ref(path: &Path, current: &str) -> String {
     let assert = rabex()
         .env("COMPLETE", "fish")
         .arg("--")
         .arg("rabex")
         .arg("file")
         .arg(path)
-        .arg("obj")
+        .arg("object")
         .arg(current)
         .assert()
         .success();
     String::from_utf8(assert.get_output().stdout.clone()).unwrap()
 }
 
-/// Empty `path_id` token must still offer every id (regression: empty token
-/// once returned only flags because arg re-parsing choked on the empty id).
+/// Empty ref token must offer every path id (regression: empty token once
+/// returned only flags because arg re-parsing choked on the empty id).
 #[test]
-fn completion_empty_path_id_offers_all_ids() {
+fn completion_empty_object_ref_offers_all_ids() {
     let (_tmp, path, go_ids) = standalone_file(&["Player", "Camera"]);
-    let stdout = complete_obj_path_id(&path, "");
+    let stdout = complete_object_ref(&path, "");
 
     for id in &go_ids {
         assert!(
@@ -425,22 +414,18 @@ fn completion_empty_path_id_offers_all_ids() {
 }
 
 #[test]
-fn completion_path_id_prefix_filters() {
+fn completion_object_ref_prefix_filters() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
-    let stdout = complete_obj_path_id(&path, "1");
+    let stdout = complete_object_ref(&path, "1");
 
     let ids: Vec<&str> = stdout
         .lines()
         .filter_map(|l| l.split('\t').next())
+        .filter(|t| t.chars().all(|c| c.is_ascii_digit() || c == '-'))
         .collect();
     assert!(!ids.is_empty(), "expected some candidates:\n{stdout}");
     assert!(
         ids.iter().all(|id| id.starts_with('1')),
-        "all candidates should start with 1: {ids:?}"
+        "all numeric candidates should start with 1: {ids:?}"
     );
-}
-
-fn stdout_json(assert: &assert_cmd::assert::Assert) -> serde_json::Value {
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    serde_json::from_str(&stdout).unwrap()
 }

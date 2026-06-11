@@ -3,27 +3,28 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::ArgValueCandidates;
 
-use crate::component_path::ComponentPath;
+use crate::component_path::ObjectRef;
 
 /// Inspect Unity serialized files, asset bundles and game directories.
 ///
-/// A game context is set with `--steam-game`/`--game-dir` before the verb, e.g.
-/// `rabex --steam-game silksong scenes` or
-/// `rabex --steam-game silksong file level0 tree`. File/scene/bundle verbs also
-/// work standalone on a filesystem path without a game context.
+/// A game context is set with `--steam-game`/`--game-dir` before the verb, or
+/// detected from the current directory. Plurals list a collection (`scenes`,
+/// `bundles`); singulars select one item then operate (`scene <name> tree`,
+/// `bundle <path> file <cab> objects`).
 #[derive(Parser)]
 #[command(name = "rabex", version, about, disable_help_subcommand = true)]
 pub struct Cli {
     #[command(flatten)]
-    pub game: GameArgs,
+    pub game: Context,
 
     #[command(subcommand)]
     pub command: Command,
 }
 
-/// The game context, shared by every command (optional for standalone paths).
+/// The game context, shared by every command (optional for standalone paths,
+/// and auto-detected from the current directory).
 #[derive(Args, Clone)]
-pub struct GameArgs {
+pub struct Context {
     /// Locate a game by steam name or app id.
     #[arg(long, global = true, value_name = "NAME", conflicts_with = "game_dir", add = ArgValueCandidates::new(crate::complete::steam_games))]
     pub steam_game: Option<String>,
@@ -35,48 +36,100 @@ pub struct GameArgs {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Show summary info about the game.
-    Info,
-    /// List the game's serialized files.
-    Ls,
+    /// Game summary.
+    Game(GameArgs),
+
     /// List scenes (build settings + addressables).
-    Scenes,
-    /// Inspect addressables: catalog stats, or look up a key.
-    #[command(visible_alias = "aa")]
+    Scenes(ScenesArgs),
+    /// List the game's serialized files.
+    Files(FilesArgs),
+    /// List asset bundles.
+    Bundles(BundlesArgs),
+    /// List addressables keys.
     Addressables(AddressablesArgs),
-    /// Inspect asset bundles (no path: list all bundles).
-    Bundle(BundleArgs),
-    /// Inspect a serialized file.
-    File(FileArgs),
-    /// Inspect a scene by name (resolved via build settings / addressables).
+
+    /// Inspect one scene by name.
     Scene(SceneArgs),
+    /// Inspect one serialized file by path.
+    File(FileArgs),
+    /// Inspect one asset bundle by path.
+    Bundle(BundleArgs),
+    /// Inspect one addressables key.
+    Addressable(AddressableArgs),
+}
+
+// -----------------------------------------------------------------------------
+// Collections (plural). Bare = list; subcommands leave room for meta verbs.
+// -----------------------------------------------------------------------------
+
+#[derive(Args)]
+pub struct GameArgs {
+    #[command(subcommand)]
+    pub verb: Option<GameVerb>,
+}
+#[derive(Subcommand)]
+pub enum GameVerb {
+    /// Summary (unity version, file/addressable counts).
+    Info,
+}
+
+#[derive(Args)]
+pub struct ScenesArgs {
+    #[command(subcommand)]
+    pub verb: Option<ScenesVerb>,
+}
+#[derive(Subcommand)]
+pub enum ScenesVerb {
+    /// List all scenes (the default).
+    List,
+}
+
+#[derive(Args)]
+pub struct FilesArgs {
+    #[command(subcommand)]
+    pub verb: Option<FilesVerb>,
+}
+#[derive(Subcommand)]
+pub enum FilesVerb {
+    /// List the game's serialized files (the default).
+    List,
+}
+
+#[derive(Args)]
+pub struct BundlesArgs {
+    #[command(subcommand)]
+    pub verb: Option<BundlesVerb>,
+}
+#[derive(Subcommand)]
+pub enum BundlesVerb {
+    /// List all bundles (the default).
+    List,
 }
 
 #[derive(Args)]
 pub struct AddressablesArgs {
     #[command(subcommand)]
-    pub command: AddressablesCmd,
+    pub verb: Option<AddressablesVerb>,
 }
-
 #[derive(Subcommand)]
-pub enum AddressablesCmd {
+pub enum AddressablesVerb {
+    /// List all keys with their asset types (the default).
+    List,
     /// Catalog overview: counts and breakdowns by provider/type.
     Stats,
-    /// List every key with the asset type(s) it resolves to.
-    Ls,
-    /// Look up a key's location(s), bundle and dependency count.
-    Info(AddressablesInfoArgs),
 }
 
-#[derive(Args)]
-pub struct AddressablesInfoArgs {
-    /// Addressabless key/address (e.g. `_GameCameras`, `Scenes/Menu_Title`).
-    #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
-    pub key: String,
+// -----------------------------------------------------------------------------
+// Items (singular): a selector then a verb.
+// -----------------------------------------------------------------------------
 
-    /// List each dependency bundle (default: just the count).
-    #[arg(long)]
-    pub dependencies: bool,
+#[derive(Args)]
+pub struct SceneArgs {
+    /// Scene name (e.g. `Greymoor_05`).
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::scene_names().unwrap_or_default()))]
+    pub name: String,
+    #[command(subcommand)]
+    pub verb: FileVerb,
 }
 
 #[derive(Args)]
@@ -84,37 +137,25 @@ pub struct FileArgs {
     /// Serialized file: a game-relative path, or a standalone fs path.
     #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::game_files().unwrap_or_default()))]
     pub path: PathBuf,
-
-    #[command(subcommand)]
-    pub verb: FileVerb,
-}
-
-#[derive(Args)]
-pub struct SceneArgs {
-    /// Scene name (e.g. `Greymoor_05`).
-    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::scene_names().unwrap_or_default()))]
-    pub name: String,
-
     #[command(subcommand)]
     pub verb: FileVerb,
 }
 
 #[derive(Args)]
 pub struct BundleArgs {
-    /// Bundle path (game-relative or fs). Omit to list all bundles.
+    /// Bundle path (game-relative or fs).
     #[arg(value_name = "PATH", add = ArgValueCandidates::new(|| crate::complete::bundle_files().unwrap_or_default()))]
-    pub path: Option<PathBuf>,
-
+    pub path: PathBuf,
     #[command(subcommand)]
-    pub verb: Option<BundleVerb>,
+    pub verb: BundleVerb,
 }
 
 #[derive(Subcommand)]
 pub enum BundleVerb {
-    /// List entries: all bundles without a path, else the bundle's files.
-    Ls,
-    /// Show the bundle's contained files.
+    /// Show the bundle's contained files with sizes.
     Info,
+    /// List the bundle's contained files (CABs).
+    Files,
     /// Inspect a serialized file (CAB) inside the bundle.
     File(BundleFileArgs),
 }
@@ -124,58 +165,63 @@ pub struct BundleFileArgs {
     /// Name of the file (CAB) inside the bundle.
     #[arg(value_name = "CAB", add = ArgValueCandidates::new(|| crate::complete::bundle_cabs().unwrap_or_default()))]
     pub cab: String,
-
     #[command(subcommand)]
     pub verb: FileVerb,
 }
 
-/// What to do with a selected serialized file (shared by file/scene/bundle).
+#[derive(Args)]
+pub struct AddressableArgs {
+    /// Addressables key/address (e.g. `_GameCameras`, `Scenes/Menu_Title`).
+    #[arg(value_name = "KEY", add = ArgValueCandidates::new(|| crate::complete::addressable_keys().unwrap_or_default()))]
+    pub key: String,
+    #[command(subcommand)]
+    pub verb: AddressableVerb,
+}
+
+#[derive(Subcommand)]
+pub enum AddressableVerb {
+    /// Catalog location(s), bundle and dependency count.
+    Info(AddressableInfoArgs),
+}
+
+#[derive(Args)]
+pub struct AddressableInfoArgs {
+    /// List each dependency bundle (default: just the count).
+    #[arg(long)]
+    pub dependencies: bool,
+}
+
+// -----------------------------------------------------------------------------
+// The shared serialized-file verb set, reached via scene / file / bundle-cab.
+// -----------------------------------------------------------------------------
+
 #[derive(Subcommand)]
 pub enum FileVerb {
     /// Show header info (version, types, object/external counts).
     Info,
-    /// List the objects (`path_id  ClassId`).
-    Ls(LsArgs),
-    /// Dump a single object by its path id.
-    Obj(ObjArgs),
-    /// Dump a component (or GameObject) by hierarchy path.
-    Cat(CatArgs),
     /// Print the Transform hierarchy.
     Tree(TreeArgs),
-}
-
-#[derive(Args)]
-pub struct CatArgs {
-    /// Reference like `Root/Child@SpriteRenderer`. Disambiguate equal names
-    /// with `:<index>` (`A/B:2@Fsm:1`); escape `/ @ :` with `\`. Without a
-    /// `@component`, dumps the GameObject itself.
-    #[arg(value_name = "PATH", value_parser = crate::component_path::parse, add = ArgValueCandidates::new(|| crate::complete::component_paths().unwrap_or_default()))]
-    pub path: ComponentPath,
-
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = Format::Json)]
-    pub format: Format,
+    /// List the objects (`path_id  ClassId`).
+    Objects(ObjectsArgs),
+    /// Inspect one object by path id or component path.
+    Object(ObjectArgs),
 }
 
 #[derive(Args)]
 pub struct TreeArgs {
-    /// Root the tree at this GameObject (hierarchy path, e.g. `Root/Child`);
-    /// omit to start from every scene root.
+    /// Root the tree at this GameObject (hierarchy path); else every root.
     #[arg(value_name = "PATH", value_parser = crate::component_path::parse, add = ArgValueCandidates::new(|| crate::complete::gameobject_paths().unwrap_or_default()))]
     pub path: Option<ComponentPath>,
-
-    /// Under each GameObject, list its components (class id, or the script name
-    /// for MonoBehaviours).
+    /// Under each GameObject, list its components.
     #[arg(long)]
     pub components: bool,
-
     /// Like `--components`, but only MonoBehaviours (by script name).
     #[arg(long, conflicts_with = "components")]
     pub scripts: bool,
 }
 
 #[derive(Args)]
-pub struct LsArgs {
+pub struct ObjectsArgs {
     /// Only list objects of this class (e.g. `MonoBehaviour`, `Texture2D`).
     #[arg(long)]
     pub r#type: Option<String>,
@@ -185,15 +231,30 @@ pub struct LsArgs {
 // positional value rather than treating it as an unknown flag.
 #[derive(Args)]
 #[command(allow_negative_numbers = true)]
-pub struct ObjArgs {
-    /// The path id of the object to dump.
-    #[arg(add = ArgValueCandidates::new(|| crate::complete::path_ids().unwrap_or_default()))]
-    pub path_id: i64,
+pub struct ObjectArgs {
+    /// A path id (e.g. `-8333…`) or a component path (`Root/Child@SpriteRenderer`).
+    #[arg(value_name = "REF", value_parser = crate::component_path::parse_object_ref, add = ArgValueCandidates::new(|| crate::complete::object_refs().unwrap_or_default()))]
+    pub reference: ObjectRef,
+    #[command(subcommand)]
+    pub verb: ObjectVerb,
+}
 
+#[derive(Subcommand)]
+pub enum ObjectVerb {
+    /// Object summary (class, name).
+    Info,
+    /// Dump the object as JSON (PPtrs annotated with `$ref`).
+    Cat(CatArgs),
+}
+
+#[derive(Args)]
+pub struct CatArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Json)]
     pub format: Format,
 }
+
+use crate::component_path::ComponentPath;
 
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Format {
