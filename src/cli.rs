@@ -12,7 +12,7 @@ use crate::component_path::ObjectRef;
 /// `bundles`); singulars select one item then operate (`scene <name> tree`,
 /// `bundle <path> file <cab> objects`).
 #[derive(Parser)]
-#[command(name = "rabex", version, about, disable_help_subcommand = true)]
+#[command(name = "rabex", version, about)]
 pub struct Cli {
     #[command(flatten)]
     pub game: Context,
