@@ -17,8 +17,19 @@ pub struct Cli {
     #[command(flatten)]
     pub game: Context,
 
+    #[command(flatten)]
+    pub output: OutputOpts,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Output options shared by every command.
+#[derive(Args, Clone)]
+pub struct OutputOpts {
+    /// Output format: human-readable text or structured JSON for tooling.
+    #[arg(long, global = true, value_enum, default_value_t = Format::Pretty)]
+    pub format: Format,
 }
 
 /// The game context, shared by every command (optional for standalone paths,
@@ -249,22 +260,17 @@ pub enum ObjectVerb {
     /// Object summary (class, name).
     Info,
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
-    Cat(CatArgs),
+    Cat,
     /// Find every object that references this one (local or from another file).
     References,
 }
 
-#[derive(Args)]
-pub struct CatArgs {
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = Format::Json)]
-    pub format: Format,
-}
-
 use crate::component_path::ComponentPath;
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
-    /// serde_json over the typetree-read value (jq-pipeable).
+    /// Human-readable text columns (the default).
+    Pretty,
+    /// Structured JSON, one document per command.
     Json,
 }

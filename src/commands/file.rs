@@ -2,6 +2,7 @@
 //! `scene` and `bundle <path> file` commands).
 
 use std::io::Write;
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 use rabex_env::addressables::ArchivePath;
@@ -11,9 +12,11 @@ use rabex_env::rabex::objects::{ClassId, PPtr};
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::Transform;
+use serde::Serialize;
 
 use crate::cli::{FileVerb, Format, ObjectVerb};
 use crate::component_path::{ComponentPath, Field, ObjectRef};
+use crate::output::{Render, emit};
 
 pub enum FileLocation {
     File(String),
@@ -34,35 +37,38 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
     file_location: FileLocation,
     file: &SerializedFileHandle<'_, R, P>,
     verb: Option<FileVerb>,
+    format: Format,
 ) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match verb.unwrap_or(FileVerb::Info) {
-        FileVerb::Info => info(file, &mut out),
+        FileVerb::Info => emit(&info(file)?, format, &mut out),
         FileVerb::Tree(args) => {
             let components = match (args.components, args.scripts) {
                 (_, true) => Components::Scripts,
                 (true, _) => Components::All,
                 _ => Components::None,
             };
-            tree(file, args.path, components, &mut out)
+            emit(&tree(file, args.path, components)?, format, &mut out)
         }
-        FileVerb::Objects(args) => list(file, args.r#type.as_deref(), args.names, &mut out),
+        FileVerb::Objects(args) => emit(
+            &list(file, args.r#type.as_deref(), args.names)?,
+            format,
+            &mut out,
+        ),
         FileVerb::Object(args) => {
             let path_id = resolve_object_ref(file, &args.reference)?;
             match args.verb.unwrap_or(ObjectVerb::Info) {
-                ObjectVerb::Info => object_info(file, path_id, &mut out),
-                ObjectVerb::Cat(cat) => dump_path_id(file, path_id, cat.format, &mut out),
-                ObjectVerb::References => {
-                    object_references(&file_location, file, path_id, &mut out)
-                }
+                ObjectVerb::Info => emit(&object_info(file, path_id)?, format, &mut out),
+                ObjectVerb::Cat => emit(&dump_path_id(file, path_id)?, format, &mut out),
+                ObjectVerb::References => emit(
+                    &object_references(&file_location, file, path_id)?,
+                    format,
+                    &mut out,
+                ),
             }
         }
-        FileVerb::References => {
-            let stdout = std::io::stdout();
-            let mut out = stdout.lock();
-            references(file_location, file, &mut out)
-        }
+        FileVerb::References => emit(&references(file_location, file)?, format, &mut out),
     }
 }
 
@@ -78,128 +84,241 @@ pub enum Components {
 }
 
 /// Header information + type count for a serialized file.
+#[derive(Serialize)]
+pub struct FileInfo {
+    /// `None` renders as `<unknown>`.
+    unity_version: Option<String>,
+    format_version: u32,
+    endianness: String,
+    file_size: u64,
+    type_tree: bool,
+    types: usize,
+    objects: usize,
+    externals: Vec<String>,
+}
+
+impl Render for FileInfo {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(out, "serialized file")?;
+        writeln!(
+            out,
+            "  unity version: {}",
+            self.unity_version.as_deref().unwrap_or("<unknown>")
+        )?;
+        writeln!(out, "  format version: {}", self.format_version)?;
+        writeln!(out, "  endianness: {}", self.endianness)?;
+        writeln!(out, "  file size: {}", self.file_size)?;
+        writeln!(out, "  type tree: {}", self.type_tree)?;
+        writeln!(out, "  types: {}", self.types)?;
+        writeln!(out, "  objects: {}", self.objects)?;
+        writeln!(out, "  externals: {}", self.externals.len())?;
+        for external in &self.externals {
+            writeln!(out, "  - {external}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Build the header information + type count for a serialized file.
 pub fn info<R: EnvResolver, P: TypeTreeProvider>(
     handle: &SerializedFileHandle<'_, R, P>,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<FileInfo> {
     let file = handle.file;
     let header = &file.m_Header;
 
-    writeln!(out, "serialized file")?;
-    writeln!(
-        out,
-        "  unity version: {}",
-        file.m_UnityVersion
-            .as_ref()
-            .map_or_else(|| "<unknown>".to_owned(), |v| v.to_string())
-    )?;
-    writeln!(out, "  format version: {}", header.m_Version)?;
-    writeln!(out, "  endianness: {:?}", header.m_Endianess)?;
-    writeln!(out, "  file size: {}", header.m_FileSize)?;
-    writeln!(out, "  type tree: {}", file.m_EnableTypeTree)?;
-    writeln!(out, "  types: {}", file.m_Types.len())?;
-    writeln!(out, "  objects: {}", file.objects().len())?;
-    writeln!(out, "  externals: {}", file.m_Externals.len())?;
-    for external in file.externals_paths() {
-        writeln!(out, "  - {}", external)?;
-    }
-    Ok(())
+    Ok(FileInfo {
+        unity_version: file.m_UnityVersion.as_ref().map(|v| v.to_string()),
+        format_version: header.m_Version,
+        endianness: format!("{:?}", header.m_Endianess),
+        file_size: header.m_FileSize as u64,
+        type_tree: file.m_EnableTypeTree,
+        types: file.m_Types.len(),
+        objects: file.objects().len(),
+        externals: file.externals_paths().map(str::to_owned).collect(),
+    })
 }
 
-/// Write `path_id  ClassId` for each object, optionally filtered to a single
+/// One object in an [`ObjectList`]: its path id and class, plus its `m_Name`
+/// when `objects --names` requested it.
+#[derive(Serialize)]
+pub struct ObjectEntry {
+    path_id: PathId,
+    class: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+/// The objects of a serialized file (`path_id  ClassId`), optionally with names.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct ObjectList(pub Vec<ObjectEntry>);
+
+impl Render for ObjectList {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        let with_names = self.0.iter().any(|o| o.name.is_some());
+        for obj in &self.0 {
+            if with_names {
+                writeln!(
+                    out,
+                    "{:>12}  {:<24}  {}",
+                    obj.path_id,
+                    obj.class,
+                    obj.name.as_deref().unwrap_or_default()
+                )?;
+            } else {
+                writeln!(out, "{:>12}  {}", obj.path_id, obj.class)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Collect `path_id`/`ClassId` for each object, optionally filtered to a single
 /// class name. Generic over the resolver so tests can drive it with an
-/// in-memory file.
+/// in-memory file. With `names`, each object's `m_Name` is read too.
 pub fn list<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     type_filter: Option<&str>,
     names: bool,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<ObjectList> {
+    let mut objects = Vec::new();
     for obj in file.objects::<()>() {
         let class_id = obj.class_id();
+        let class = format!("{class_id:?}");
         if let Some(filter) = type_filter
-            && format!("{class_id:?}") != *filter
+            && class != *filter
         {
             continue;
         }
         let path_id = obj.path_id();
-        if names {
+        let name = names.then(|| {
             // Reading the name means deserializing the object; tolerate failures (e.g. a
             // MonoBehaviour whose script typetree isn't available) by leaving it blank.
-            let name = file
-                .object_at::<serde_json::Value>(path_id)
+            file.object_at::<serde_json::Value>(path_id)
                 .and_then(|o| o.read())
                 .ok()
                 .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
-                .unwrap_or_default();
-            writeln!(
-                out,
-                "{path_id:>12}  {:<24}  {name}",
-                format!("{class_id:?}")
-            )?;
-        } else {
-            writeln!(out, "{path_id:>12}  {class_id:?}")?;
-        }
+                .unwrap_or_default()
+        });
+        objects.push(ObjectEntry {
+            path_id,
+            class,
+            name,
+        });
     }
-    Ok(())
+    Ok(ObjectList(objects))
 }
 
-/// Read object `path_id` via its typetree and write it in the requested format.
+/// Read object `path_id` via its typetree, annotating PPtrs with a
+/// re-`cat`-able `$ref` component path. The result is dumped as JSON.
 pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
-    format: Format,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<serde_json::Value> {
     let object = file.object_at::<serde_json::Value>(path_id)?;
     let mut value = object.read()?;
-    // Annotate PPtrs with a re-`cat`-able `$ref` component path.
     crate::qualify::qualify(file, &mut value);
-
-    match format {
-        Format::Json => {
-            serde_json::to_writer_pretty(&mut *out, &value)?;
-            writeln!(out)?;
-        }
-    }
-    Ok(())
+    Ok(value)
 }
 
-/// Print the GameObject hierarchy, indented by depth. Names come from each
-/// transform's GameObject; the GameObject path id is shown for `obj` follow-up.
-/// `components` selects which components to list beneath each GameObject. `root`
-/// scopes the tree to one GameObject's subtree; without it, every scene root.
+/// A node in the GameObject hierarchy [`Tree`].
+#[derive(Serialize)]
+pub struct TreeNode {
+    name: String,
+    path_id: PathId,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    components: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<TreeNode>,
+}
+
+impl TreeNode {
+    fn render(&self, depth: usize, out: &mut dyn Write) -> Result<()> {
+        writeln!(
+            out,
+            "{}{}  #{}",
+            "  ".repeat(depth),
+            quote_if_spaced(&self.name),
+            self.path_id
+        )?;
+        for label in &self.components {
+            writeln!(out, "{}- {}", "  ".repeat(depth + 1), label)?;
+        }
+        for child in &self.children {
+            child.render(depth + 1, out)?;
+        }
+        Ok(())
+    }
+}
+
+/// The GameObject hierarchy of a serialized file.
+#[derive(Serialize)]
+pub struct Tree {
+    roots: Vec<TreeNode>,
+    /// Objects not reachable through the hierarchy (managers, assets, orphaned
+    /// components). Always 0 when the tree is scoped to a `root`.
+    outside_hierarchy: usize,
+}
+
+impl Render for Tree {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        for root in &self.roots {
+            root.render(0, out)?;
+        }
+        if self.outside_hierarchy > 0 {
+            let noun = if self.outside_hierarchy == 1 {
+                "object"
+            } else {
+                "objects"
+            };
+            writeln!(
+                out,
+                "{} {noun} outside the hierarchy",
+                self.outside_hierarchy
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Build the GameObject hierarchy. Names come from each transform's GameObject;
+/// the GameObject path id is recorded for `obj` follow-up. `components` selects
+/// which components to attach to each GameObject. `root` scopes the tree to one
+/// GameObject's subtree; without it, every scene root.
 pub fn tree<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     root: Option<ComponentPath>,
     components: Components,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<Tree> {
     if let Some(root) = root {
         if root.component.is_some() {
             bail!("tree takes a GameObject path, not a component (drop the `@…`)");
         }
         let transform = resolve_path(file, &root)?;
-        print_node(file, &transform, 0, components, out)?;
-        return Ok(());
+        let roots = build_node(file, &transform, components)?
+            .into_iter()
+            .collect();
+        return Ok(Tree {
+            roots,
+            outside_hierarchy: 0,
+        });
     }
 
+    let mut roots = Vec::new();
     for transform in file.transforms() {
         let transform = transform.read()?;
         if transform.m_Father.optional().is_some() {
             continue;
         }
-        print_node(file, &transform, 0, components, out)?;
+        if let Some(node) = build_node(file, &transform, components)? {
+            roots.push(node);
+        }
     }
 
-    // Objects not reachable through the GameObject hierarchy (managers, assets,
-    // orphaned components) — e.g. globalgamemanagers has only these.
-    let outside = objects_outside_hierarchy(file)?;
-    if outside > 0 {
-        let noun = if outside == 1 { "object" } else { "objects" };
-        writeln!(out, "{outside} {noun} outside the hierarchy")?;
-    }
-    Ok(())
+    Ok(Tree {
+        roots,
+        outside_hierarchy: objects_outside_hierarchy(file)?,
+    })
 }
 
 /// Count objects not covered by the GameObject hierarchy: total objects minus
@@ -230,52 +349,46 @@ fn quote_if_spaced(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Print a node and its subtree; returns whether anything was printed. In
+/// Build a node and its subtree, or `None` when pruned. In
 /// [`Components::Scripts`] mode a GameObject with no scripts in its whole
-/// subtree is pruned (returns `false`), so only paths leading to a script show.
-fn print_node<R: EnvResolver, P: TypeTreeProvider>(
+/// subtree is pruned, so only paths leading to a script remain.
+fn build_node<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     transform: &Transform,
-    depth: usize,
     components: Components,
-    out: &mut impl Write,
-) -> Result<bool> {
+) -> Result<Option<TreeNode>> {
     let go = file.deref_read(transform.m_GameObject)?;
 
-    let mut component_lines = Vec::new();
+    let mut component_labels = Vec::new();
     if components != Components::None {
         for pair in &go.m_Component {
             let (class_id, label) = component_class_and_label(file, pair.component)?;
             if components == Components::Scripts && class_id != ClassId::MonoBehaviour {
                 continue;
             }
-            component_lines.push(format!("{}- {}", "  ".repeat(depth + 1), label));
+            component_labels.push(label);
         }
     }
 
-    // Render children first, so scripts mode can prune script-less subtrees.
+    // Build children first, so scripts mode can prune script-less subtrees.
     let mut children = Vec::new();
     for child in &transform.m_Children {
         let child = file.deref_read(*child)?;
-        print_node(file, &child, depth + 1, components, &mut children)?;
+        if let Some(node) = build_node(file, &child, components)? {
+            children.push(node);
+        }
     }
 
-    if components == Components::Scripts && component_lines.is_empty() && children.is_empty() {
-        return Ok(false);
+    if components == Components::Scripts && component_labels.is_empty() && children.is_empty() {
+        return Ok(None);
     }
 
-    writeln!(
-        out,
-        "{}{}  #{}",
-        "  ".repeat(depth),
-        quote_if_spaced(&go.m_Name),
-        transform.m_GameObject.m_PathID
-    )?;
-    for line in &component_lines {
-        writeln!(out, "{line}")?;
-    }
-    out.write_all(&children)?;
-    Ok(true)
+    Ok(Some(TreeNode {
+        name: go.m_Name,
+        path_id: transform.m_GameObject.m_PathID,
+        components: component_labels,
+        children,
+    }))
 }
 
 /// A component's class name, or the script's class name for a MonoBehaviour.
@@ -337,26 +450,51 @@ fn resolve_component_path<R: EnvResolver, P: TypeTreeProvider>(
 
 /// Summary of an object: its class (script name for a MonoBehaviour) and, if
 /// present, its `m_Name`.
+#[derive(Serialize)]
+pub struct ObjectInfo {
+    path_id: PathId,
+    class: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+impl Render for ObjectInfo {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(out, "  {:<9}{}", "path id:", self.path_id)?;
+        writeln!(out, "  {:<9}{}", "class:", self.class)?;
+        if let Some(script) = &self.script {
+            writeln!(out, "  {:<9}{script}", "script:")?;
+        }
+        if let Some(name) = &self.name {
+            writeln!(out, "  {:<9}{name}", "name:")?;
+        }
+        Ok(())
+    }
+}
+
+/// Build an object summary: its class (script name for a MonoBehaviour) and, if
+/// present, its `m_Name`.
 pub fn object_info<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<ObjectInfo> {
     let (class_id, label) = component_class_and_label(file, PPtr::local(path_id))?;
-    writeln!(out, "  {:<9}{path_id}", "path id:")?;
-    writeln!(out, "  {:<9}{class_id:?}", "class:")?;
-    if label != format!("{class_id:?}") {
-        writeln!(out, "  {:<9}{label}", "script:")?;
-    }
-    if let Ok(value) = file
+    let class = format!("{class_id:?}");
+    let script = (label != class).then_some(label);
+    let name = file
         .object_at::<serde_json::Value>(path_id)
         .and_then(|o| o.read())
-        && let Some(name) = value.get("m_Name").and_then(|n| n.as_str())
-        && !name.is_empty()
-    {
-        writeln!(out, "  {:<9}{name}", "name:")?;
-    }
-    Ok(())
+        .ok()
+        .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
+        .filter(|name| !name.is_empty());
+    Ok(ObjectInfo {
+        path_id,
+        class,
+        script,
+        name,
+    })
 }
 
 /// Walk the hierarchy described by `path`'s segments to the target GameObject's
@@ -425,43 +563,82 @@ fn pick<T>(matches: Vec<T>, field: &Field, kind: &str) -> Result<T> {
     }
 }
 
+/// The files that reference a serialized file (via their externals list).
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct FileReferences(pub Vec<PathBuf>);
+
+impl Render for FileReferences {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        if self.0.is_empty() {
+            writeln!(out, "No references found")?;
+        }
+        for reference in &self.0 {
+            writeln!(out, "- {}", reference.display())?;
+        }
+        Ok(())
+    }
+}
+
+/// Find every file that references the given file (via its externals list).
 pub fn references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     file_location: FileLocation,
     handle: &SerializedFileHandle<'_, R, P>,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<FileReferences> {
     let references =
         find_references::external_references(handle.env, &file_location.external_name())?;
-    if references.is_empty() {
-        writeln!(out, "No references found")?;
-    }
-    for reference in references {
-        writeln!(out, "- {}", reference.display())?;
-    }
-
-    Ok(())
+    Ok(FileReferences(references))
 }
 
-/// Find every object that references the given object (local or from another file) and print them.
+/// One object that references a target object.
+#[derive(Serialize)]
+pub struct Referrer {
+    file: String,
+    path_id: PathId,
+}
+
+/// Every object that references a target object (local or from another file).
+#[derive(Serialize)]
+pub struct ObjectReferences {
+    target: String,
+    path_id: PathId,
+    referrers: Vec<Referrer>,
+}
+
+impl Render for ObjectReferences {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(
+            out,
+            "{} reference(s) to {}#{}:",
+            self.referrers.len(),
+            self.target,
+            self.path_id
+        )?;
+        for referrer in &self.referrers {
+            writeln!(out, "- {} #{}", referrer.file, referrer.path_id)?;
+        }
+        Ok(())
+    }
+}
+
+/// Find every object that references the given object (local or from another file).
 pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     file_location: &FileLocation,
     handle: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
-    out: &mut impl Write,
-) -> Result<()> {
+) -> Result<ObjectReferences> {
     let target = file_location.external_name();
     let mut referrers = find_references::referencing_objects(handle.env, &target, path_id)?;
     referrers.sort();
 
-    writeln!(
-        out,
-        "{} reference(s) to {target}#{path_id}:",
-        referrers.len()
-    )?;
-    for (file, path_id) in referrers {
-        writeln!(out, "- {file} #{path_id}")?;
-    }
-    Ok(())
+    Ok(ObjectReferences {
+        target,
+        path_id,
+        referrers: referrers
+            .into_iter()
+            .map(|(file, path_id)| Referrer { file, path_id })
+            .collect(),
+    })
 }
 
 mod find_references {

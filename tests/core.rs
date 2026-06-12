@@ -1,5 +1,5 @@
-//! Core logic tests — drive the extracted `list`/`dump` functions against an
-//! in-memory fixture file. No filesystem, no game directory.
+//! Core logic tests — drive the extracted `list`/`dump`/`tree` builders against
+//! an in-memory fixture file. No filesystem, no game directory.
 
 mod fixtures;
 
@@ -8,17 +8,30 @@ use rabex_cli::cli::Format;
 use rabex_cli::commands::file;
 use rabex_cli::commands::file::Components;
 use rabex_cli::component_path::{parse as parse_path, parse_object_ref};
+use rabex_cli::output::{Render, emit};
 
 const PATH: &str = "level0";
+
+/// Render a command result to its human-readable (`pretty`) text.
+fn pretty<T: Render>(value: &T) -> String {
+    let mut out = Vec::new();
+    emit(value, Format::Pretty, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+/// Render a command result to JSON and parse it back.
+fn json<T: Render>(value: &T) -> serde_json::Value {
+    let mut out = Vec::new();
+    emit(value, Format::Json, &mut out).unwrap();
+    serde_json::from_slice(&out).unwrap()
+}
 
 #[test]
 fn ls_lists_every_object() {
     let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::list(file, None, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::list(file, None, false).unwrap());
 
         // Two GameObjects + two Transforms.
         let lines: Vec<&str> = out.lines().collect();
@@ -37,13 +50,32 @@ fn ls_lists_every_object() {
 }
 
 #[test]
+fn ls_json_is_an_array_of_objects() {
+    let (bytes, go_ids) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        // Without --names, entries carry just path_id and class.
+        let value = json(&file::list(file, Some("GameObject"), false).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!([{ "path_id": go_ids[0], "class": "GameObject" }])
+        );
+
+        // With --names, each entry also carries its m_Name.
+        let value = json(&file::list(file, Some("GameObject"), true).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!([{ "path_id": go_ids[0], "class": "GameObject", "name": "Player" }])
+        );
+    });
+}
+
+#[test]
 fn ls_type_filter_matches_exact_class() {
     let (bytes, _) = Flat::new(&["Player", "Camera"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::list(file, Some("GameObject"), &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::list(file, Some("GameObject"), false).unwrap());
 
         assert_eq!(out.lines().count(), 2);
         assert!(out.lines().all(|l| l.ends_with("GameObject")), "{out}");
@@ -55,9 +87,8 @@ fn ls_type_filter_unknown_class_is_empty() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::list(file, Some("Texture2D"), &mut out).unwrap();
-        assert_eq!(out, b"");
+        let out = pretty(&file::list(file, Some("Texture2D"), false).unwrap());
+        assert_eq!(out, "");
     });
 }
 
@@ -66,10 +97,7 @@ fn obj_dumps_named_gameobject_as_json() {
     let (bytes, go_ids) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::dump_path_id(file, go_ids[0], Format::Json, &mut out).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
-
+        let value = file::dump_path_id(file, go_ids[0]).unwrap();
         assert_eq!(value["m_Name"], "Player");
     });
 }
@@ -79,9 +107,7 @@ fn tree_lists_roots_at_depth_zero() {
     let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::tree(file, None, Components::None, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::tree(file, None, Components::None).unwrap());
 
         // A flat scene: every GameObject is a root, none indented.
         let lines: Vec<&str> = out.lines().collect();
@@ -100,10 +126,7 @@ fn tree_quotes_names_with_spaces() {
     let (bytes, go_ids) = Flat::new(&["Main Camera"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::tree(file, None, Components::None, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
-
+        let out = pretty(&file::tree(file, None, Components::None).unwrap());
         assert_eq!(out, format!("'Main Camera'  #{}\n", go_ids[0]));
     });
 }
@@ -113,10 +136,8 @@ fn tree_scoped_to_a_root_path() {
     let (bytes, go_ids) = Flat::new(&["Player", "Camera"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
         let root = parse_path("Camera").unwrap();
-        file::tree(file, Some(root), Components::None, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::tree(file, Some(root), Components::None).unwrap());
 
         // Only the named GameObject (flat fixture: no children).
         assert_eq!(out, format!("Camera  #{}\n", go_ids[1]));
@@ -128,9 +149,7 @@ fn tree_components_lists_each_components() {
     let (bytes, go_ids) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::tree(file, None, Components::All, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::tree(file, None, Components::All).unwrap());
 
         // The fixture gives each GameObject a single Transform component.
         assert_eq!(out, format!("Player  #{}\n  - Transform\n", go_ids[0]));
@@ -142,9 +161,7 @@ fn tree_scripts_prunes_gameobjects_without_scripts() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        file::tree(file, None, Components::Scripts, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = pretty(&file::tree(file, None, Components::Scripts).unwrap());
 
         // The fixture's only component is a Transform (no scripts), so the
         // GameObject is pruned entirely.
@@ -158,9 +175,7 @@ fn cat_dumps_gameobject_by_path() {
 
     with_handle(PATH, bytes, |file| {
         let path_id = file::resolve_object_ref(file, &parse_object_ref("Player").unwrap()).unwrap();
-        let mut out = Vec::new();
-        file::dump_path_id(file, path_id, Format::Json, &mut out).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let value = file::dump_path_id(file, path_id).unwrap();
 
         // The GameObject's sole component is the Transform, whose PPtr gains a
         // re-cat-able $ref.
@@ -179,9 +194,7 @@ fn cat_dumps_component_by_path() {
     with_handle(PATH, bytes, |file| {
         let path_id =
             file::resolve_object_ref(file, &parse_object_ref("Player@Transform").unwrap()).unwrap();
-        let mut out = Vec::new();
-        file::dump_path_id(file, path_id, Format::Json, &mut out).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let value = file::dump_path_id(file, path_id).unwrap();
 
         // A Transform points back at its GameObject, with a $ref.
         assert_eq!(value["m_GameObject"]["$ref"], "Player");
@@ -203,8 +216,7 @@ fn obj_missing_path_id_errors() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let mut out = Vec::new();
-        let err = file::dump_path_id(file, 9999, Format::Json, &mut out).unwrap_err();
+        let err = file::dump_path_id(file, 9999).unwrap_err();
         assert!(
             err.to_string().contains("9999"),
             "error should mention the missing id: {err}"
