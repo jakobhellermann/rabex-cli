@@ -1,16 +1,18 @@
 //! Annotating PPtrs in a dumped object's JSON with a human-readable, and
 //! re-`cat`-able, `$ref` component path.
 //!
-//! A serialized PPtr is `{ "m_FileID": .., "m_PathID": .. }`. For every local
-//! one that resolves to a scene-hierarchy object we add a `$ref` field holding
-//! the [`ComponentPath`] addressing it — `Root/Child@SpriteRenderer`, with
+//! A serialized PPtr is `{ "m_FileID": .., "m_PathID": .. }`. For every one
+//! that resolves to a scene-hierarchy object we add a `$ref` field holding the
+//! [`ComponentPath`] addressing it — `Root/Child@SpriteRenderer`, with
 //! disambiguating `:index` only where names repeat — so it round-trips back
-//! through `cat`.
+//! through `cat`. External PPtrs (`m_FileID != 0`) additionally get a `file`
+//! field with the resolved external file name, and their `$ref` is built in
+//! that external file's own hierarchy.
 
 use std::collections::HashMap;
 
 use rabex_env::handle::SerializedFileHandle;
-use rabex_env::rabex::objects::pptr::PathId;
+use rabex_env::rabex::objects::pptr::{FileId, PathId};
 use rabex_env::rabex::objects::{ClassId, PPtr, TypedPPtr};
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
@@ -20,34 +22,56 @@ use serde_json::Value;
 use crate::commands::file::component_label;
 use crate::component_path::{ComponentPath, Field};
 
-/// Walk a dumped object's JSON and add a `$ref` to every local PPtr that
-/// resolves to a scene object. Best-effort: a PPtr that can't be resolved is
-/// left untouched.
-pub fn qualify<R: EnvResolver, P: TypeTreeProvider>(
-    file: &SerializedFileHandle<'_, R, P>,
+/// Walk a dumped object's JSON and annotate every PPtr that resolves to a
+/// scene object with a `$ref` (and, for externals, the resolved `file`).
+/// Best-effort: a PPtr that can't be resolved is left untouched.
+pub fn qualify<'a, R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'a, R, P>,
     value: &mut Value,
 ) {
     let mut cx = Cx {
-        file,
-        roots: roots(file),
-        cache: HashMap::new(),
+        local: FileCtx::new(file.reborrow()),
+        externals: HashMap::new(),
     };
     walk(&mut cx, value);
 }
 
-struct Cx<'a, R, P> {
-    file: &'a SerializedFileHandle<'a, R, P>,
+/// The qualification state for one serialized file: its roots and a `$ref`
+/// memo. Built per target file (the local file plus each external touched).
+struct FileCtx<'a, R, P> {
+    file: SerializedFileHandle<'a, R, P>,
     /// All root transforms as (transform path id, owning GameObject name).
     roots: Vec<(PathId, String)>,
     /// Memoised `$ref` per target path id (None = not a hierarchy object).
     cache: HashMap<PathId, Option<String>>,
 }
 
+impl<'a, R: EnvResolver, P: TypeTreeProvider> FileCtx<'a, R, P> {
+    fn new(file: SerializedFileHandle<'a, R, P>) -> Self {
+        let roots = roots(&file);
+        FileCtx {
+            file,
+            roots,
+            cache: HashMap::new(),
+        }
+    }
+}
+
+struct Cx<'a, R, P> {
+    local: FileCtx<'a, R, P>,
+    /// External files keyed by `m_FileID`; `None` = couldn't be loaded.
+    externals: HashMap<i32, Option<FileCtx<'a, R, P>>>,
+}
+
 fn walk<R: EnvResolver, P: TypeTreeProvider>(cx: &mut Cx<'_, R, P>, value: &mut Value) {
     match value {
         Value::Object(map) => {
-            if let Some(path_id) = local_pptr(map) {
-                if let Some(reference) = ref_for(cx, path_id) {
+            if let Some(pptr) = pptr_from_map(map) {
+                let (file, reference) = annotate(cx, pptr);
+                if let Some(file) = file {
+                    map.insert("file".to_owned(), Value::String(file));
+                }
+                if let Some(reference) = reference {
                     map.insert("$ref".to_owned(), Value::String(reference));
                 }
                 return;
@@ -65,19 +89,56 @@ fn walk<R: EnvResolver, P: TypeTreeProvider>(cx: &mut Cx<'_, R, P>, value: &mut 
     }
 }
 
-/// The path id of a local, non-null PPtr map (`{m_FileID: 0, m_PathID: N}`).
-fn local_pptr(map: &serde_json::Map<String, Value>) -> Option<PathId> {
+/// The non-null PPtr a map (`{m_FileID, m_PathID}`) represents, local or not.
+fn pptr_from_map(map: &serde_json::Map<String, Value>) -> Option<PPtr> {
     if map.len() != 2 {
         return None;
     }
     let file_id = map.get("m_FileID")?.as_i64()?;
     let path_id = map.get("m_PathID")?.as_i64()?;
-    (file_id == 0 && path_id != 0).then_some(path_id)
+    PPtr::new(FileId::new(file_id as i32), path_id).optional()
 }
 
-/// Memoised `$ref` string for a target path id.
-fn ref_for<R: EnvResolver, P: TypeTreeProvider>(
+/// Resolve a PPtr to `(file, $ref)`: `file` is the external file name (only for
+/// external PPtrs), `$ref` the [`ComponentPath`] in the target file (only if it
+/// resolves to a hierarchy object). Both best-effort.
+fn annotate<R: EnvResolver, P: TypeTreeProvider>(
     cx: &mut Cx<'_, R, P>,
+    pptr: PPtr,
+) -> (Option<String>, Option<String>) {
+    if pptr.is_local() {
+        return (None, ref_in(&mut cx.local, pptr.m_PathID));
+    }
+
+    let file = pptr
+        .file_identifier(cx.local.file.file)
+        .map(|external| external.pathName.clone());
+
+    let key = pptr.m_FileID.value();
+    if !cx.externals.contains_key(&key) {
+        let ctx = external_ctx(&cx.local, pptr);
+        cx.externals.insert(key, ctx);
+    }
+    let reference = match cx.externals.get_mut(&key).unwrap() {
+        Some(ctx) => ref_in(ctx, pptr.m_PathID),
+        None => None,
+    };
+    (file, reference)
+}
+
+/// Load the external file `pptr` points into as a [`FileCtx`], or `None` if it
+/// can't be resolved.
+fn external_ctx<'a, R: EnvResolver, P: TypeTreeProvider>(
+    local: &FileCtx<'a, R, P>,
+    pptr: PPtr,
+) -> Option<FileCtx<'a, R, P>> {
+    let handle = local.file.deref(pptr.typed::<()>()).ok()?.file;
+    Some(FileCtx::new(handle))
+}
+
+/// Memoised `$ref` string for a target path id within `cx`'s file.
+fn ref_in<R: EnvResolver, P: TypeTreeProvider>(
+    cx: &mut FileCtx<'_, R, P>,
     target: PathId,
 ) -> Option<String> {
     if let Some(cached) = cx.cache.get(&target) {
@@ -93,7 +154,7 @@ fn ref_for<R: EnvResolver, P: TypeTreeProvider>(
 /// Build the [`ComponentPath`] addressing `target`, or `None` if it is not a
 /// GameObject or a component on one (e.g. a loose asset).
 fn build_path<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     target: PathId,
 ) -> anyhow::Result<Option<ComponentPath>> {
     let class = cx.file.object_at::<()>(target)?.class_id();
@@ -109,7 +170,7 @@ fn build_path<R: EnvResolver, P: TypeTreeProvider>(
         let Some(go) = component.m_GameObject.optional() else {
             return Ok(None);
         };
-        let label = component_label(cx.file, PPtr::local(target))?;
+        let label = component_label(&cx.file, PPtr::local(target))?;
         let index = component_index(cx, go.m_PathID, target, &label)?;
         (go.m_PathID, Some(Field { name: label, index }))
     };
@@ -126,7 +187,7 @@ fn build_path<R: EnvResolver, P: TypeTreeProvider>(
 /// Index of `target` among `go`'s components sharing its label, or `None` if it
 /// is the only one of that label.
 fn component_index<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     go_id: PathId,
     target: PathId,
     label: &str,
@@ -134,7 +195,7 @@ fn component_index<R: EnvResolver, P: TypeTreeProvider>(
     let go = cx.file.deref_read(TypedPPtr::<GameObject>::local(go_id))?;
     let mut same = Vec::new();
     for pair in &go.m_Component {
-        if component_label(cx.file, pair.component)? == label {
+        if component_label(&cx.file, pair.component)? == label {
             same.push(pair.component.m_PathID);
         }
     }
@@ -144,7 +205,7 @@ fn component_index<R: EnvResolver, P: TypeTreeProvider>(
 /// The hierarchy segments (root first) addressing the GameObject `go_id`, or
 /// `None` if it has no Transform (not part of the scene hierarchy).
 fn go_segments<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     go_id: PathId,
 ) -> anyhow::Result<Option<Vec<Field>>> {
     let Some(transform_id) = gameobject_transform(cx, go_id)? else {
@@ -183,7 +244,7 @@ fn go_segments<R: EnvResolver, P: TypeTreeProvider>(
 
 /// The path id of a GameObject's (Rect)Transform component, if any.
 fn gameobject_transform<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     go_id: PathId,
 ) -> anyhow::Result<Option<PathId>> {
     let go = cx.file.deref_read(TypedPPtr::<GameObject>::local(go_id))?;
@@ -197,14 +258,14 @@ fn gameobject_transform<R: EnvResolver, P: TypeTreeProvider>(
 }
 
 fn transform_go_name<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     transform: &Transform,
 ) -> anyhow::Result<String> {
     Ok(cx.file.deref_read(transform.m_GameObject)?.m_Name)
 }
 
 /// Root transform ids whose GameObject is named `name`.
-fn self_named_roots<R, P>(cx: &Cx<'_, R, P>, name: &str) -> Vec<PathId> {
+fn self_named_roots<R, P>(cx: &FileCtx<'_, R, P>, name: &str) -> Vec<PathId> {
     cx.roots
         .iter()
         .filter(|(_, n)| n == name)
@@ -214,7 +275,7 @@ fn self_named_roots<R, P>(cx: &Cx<'_, R, P>, name: &str) -> Vec<PathId> {
 
 /// Child transform ids of `parent` whose GameObject is named `name`.
 fn named_children<R: EnvResolver, P: TypeTreeProvider>(
-    cx: &Cx<'_, R, P>,
+    cx: &FileCtx<'_, R, P>,
     parent: &Transform,
     name: &str,
 ) -> anyhow::Result<Vec<PathId>> {
