@@ -47,7 +47,7 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             };
             tree(file, args.path, components, &mut out)
         }
-        FileVerb::Objects(args) => list(file, args.r#type.as_deref(), &mut out),
+        FileVerb::Objects(args) => list(file, args.r#type.as_deref(), args.names, &mut out),
         FileVerb::Object(args) => {
             let path_id = resolve_object_ref(file, &args.reference)?;
             match args.verb.unwrap_or(ObjectVerb::Info) {
@@ -109,6 +109,7 @@ pub fn info<R: EnvResolver, P: TypeTreeProvider>(
 pub fn list<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     type_filter: Option<&str>,
+    names: bool,
     out: &mut impl Write,
 ) -> Result<()> {
     for obj in file.objects::<()>() {
@@ -118,7 +119,24 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
         {
             continue;
         }
-        writeln!(out, "{:>12}  {:?}", obj.path_id(), class_id)?;
+        let path_id = obj.path_id();
+        if names {
+            // Reading the name means deserializing the object; tolerate failures (e.g. a
+            // MonoBehaviour whose script typetree isn't available) by leaving it blank.
+            let name = file
+                .object_at::<serde_json::Value>(path_id)
+                .and_then(|o| o.read())
+                .ok()
+                .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
+                .unwrap_or_default();
+            writeln!(
+                out,
+                "{path_id:>12}  {:<24}  {name}",
+                format!("{class_id:?}")
+            )?;
+        } else {
+            writeln!(out, "{path_id:>12}  {class_id:?}")?;
+        }
     }
     Ok(())
 }

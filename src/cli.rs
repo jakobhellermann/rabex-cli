@@ -227,6 +227,9 @@ pub struct ObjectsArgs {
     /// Only list objects of this class (e.g. `MonoBehaviour`, `Texture2D`).
     #[arg(long)]
     pub r#type: Option<String>,
+    /// Also show each object's `m_Name` (slower: deserializes every listed object).
+    #[arg(long)]
+    pub names: bool,
 }
 
 // Path ids are i64 and routinely negative; let clap accept `-8333…` as the
