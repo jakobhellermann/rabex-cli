@@ -250,6 +250,8 @@ pub enum ObjectVerb {
     Info,
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
     Cat(CatArgs),
+    /// Find every object that references this one (local or from another file).
+    References,
 }
 
 #[derive(Args)]

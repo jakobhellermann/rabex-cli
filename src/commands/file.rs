@@ -53,6 +53,9 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             match args.verb.unwrap_or(ObjectVerb::Info) {
                 ObjectVerb::Info => object_info(file, path_id, &mut out),
                 ObjectVerb::Cat(cat) => dump_path_id(file, path_id, cat.format, &mut out),
+                ObjectVerb::References => {
+                    object_references(&file_location, file, path_id, &mut out)
+                }
             }
         }
         FileVerb::References => {
@@ -439,16 +442,40 @@ pub fn references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     Ok(())
 }
 
+/// Find every object that references the given object (local or from another file) and print them.
+pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
+    file_location: &FileLocation,
+    handle: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+    out: &mut impl Write,
+) -> Result<()> {
+    let target = file_location.external_name();
+    let mut referrers = find_references::referencing_objects(handle.env, &target, path_id)?;
+    referrers.sort();
+
+    writeln!(
+        out,
+        "{} reference(s) to {target}#{path_id}:",
+        referrers.len()
+    )?;
+    for (file, path_id) in referrers {
+        writeln!(out, "- {file} #{path_id}")?;
+    }
+    Ok(())
+}
+
 mod find_references {
     use std::io::Cursor;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
+    use anyhow::{Context as _, Result};
     use rabex::files::SerializedFile;
+    use rabex::objects::pptr::PathId;
     use rabex::typetree::TypeTreeProvider;
     use rabex_env::Environment;
+    use rabex_env::addressables::ArchivePath;
+    use rabex_env::handle::SerializedFileHandle;
     use rabex_env::resolver::EnvResolver;
-
-    use anyhow::Result;
     use rayon::iter::ParallelBridge as _;
 
     /// Every file whose externals list `to`. Scans both the addressables
@@ -489,5 +516,87 @@ mod find_references {
 
         referrers.extend(plain);
         Ok(referrers)
+    }
+
+    /// Every object that references `(target_file, target_path_id)`, as `(referrer file, path id)`.
+    ///
+    /// Only files that list `target_file` in their externals (plus `target_file` itself, for local
+    /// references) can reference the object, so the rest are skipped without scanning their objects.
+    pub fn referencing_objects<R: EnvResolver, P: TypeTreeProvider + Sync>(
+        env: &Environment<R, P>,
+        target_file: &str,
+        target_path_id: PathId,
+    ) -> Result<Vec<(String, PathId)>> {
+        let from_bundles = rabex_env::utils::par_fold_reduce(
+            env.addressables_bundles()?.into_iter().par_bridge(),
+            |acc: &mut Vec<(String, PathId)>, bundle_path| {
+                let bundle = env.load_addressables_bundle(&bundle_path)?;
+                let bundle_id = bundle
+                    .serialized_files()
+                    .find_map(|f| {
+                        Path::new(&f.path)
+                            .extension()
+                            .is_none()
+                            .then(|| f.path.clone())
+                    })
+                    .context("bundle has no main serialized file")?;
+                for entry in bundle.serialized_files() {
+                    let name = ArchivePath::new(&bundle_id, &entry.path).to_string();
+                    let data = bundle.read_at_entry(entry)?;
+                    let file = SerializedFile::from_reader(&mut Cursor::new(data.as_slice()))?;
+                    if name != target_file && !file.externals_paths().any(|e| e == target_file) {
+                        continue;
+                    }
+                    let handle = SerializedFileHandle::new(env, &file, &data);
+                    scan_objects(&handle, &name, target_file, target_path_id, acc)?;
+                }
+                Ok(())
+            },
+        )?;
+
+        let from_plain = rabex_env::utils::par_fold_reduce(
+            env.game_files.serialized_files()?.into_iter().par_bridge(),
+            |acc: &mut Vec<(String, PathId)>, path| {
+                let data = env.game_files.read_path(&path)?;
+                let file = SerializedFile::from_reader(&mut Cursor::new(data.as_ref()))?;
+                let name = path.display().to_string();
+                if name != target_file && !file.externals_paths().any(|e| e == target_file) {
+                    return Ok(());
+                }
+                let handle = SerializedFileHandle::new(env, &file, data.as_ref());
+                scan_objects(&handle, &name, target_file, target_path_id, acc)
+            },
+        )?;
+
+        let mut referrers = from_bundles;
+        referrers.extend(from_plain);
+        Ok(referrers)
+    }
+
+    /// Collect objects in `handle` whose reachable PPtrs point at `(target_file, target_path_id)`.
+    fn scan_objects<R: EnvResolver, P: TypeTreeProvider>(
+        handle: &SerializedFileHandle<'_, R, P>,
+        name: &str,
+        target_file: &str,
+        target_path_id: PathId,
+        acc: &mut Vec<(String, PathId)>,
+    ) -> Result<()> {
+        for object in handle.objects::<()>() {
+            for pptr in object.reachable_one()? {
+                let referenced = match pptr.is_local() {
+                    // a local PPtr points within `name`, so it can only hit the target object if
+                    // this file *is* the target file
+                    true => name,
+                    false => match pptr.file_identifier(handle.file) {
+                        Some(external) => external.pathName.as_str(),
+                        None => continue,
+                    },
+                };
+                if referenced == target_file && pptr.m_PathID == target_path_id {
+                    acc.push((name.to_owned(), object.path_id()));
+                }
+            }
+        }
+        Ok(())
     }
 }
