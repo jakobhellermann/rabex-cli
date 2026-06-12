@@ -82,7 +82,7 @@ fn with_target_handle(
                 return Ok(Vec::new());
             };
             let env = ctx::require_game_env(&game)?;
-            let handle = ctx::open_scene(&env, name)?;
+            let (handle, _location) = ctx::open_scene(&env, name)?;
             f(&handle)
         }
         Some(("bundle", m)) => {

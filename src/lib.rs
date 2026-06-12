@@ -13,6 +13,7 @@ pub mod commands {
 use anyhow::Result;
 
 use crate::cli::{AddressableVerb, AddressablesVerb, Command, GameVerb};
+use crate::commands::file::FileLocation;
 
 /// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
 pub fn run(cli: crate::cli::Cli) -> Result<()> {
@@ -39,13 +40,17 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         // Items (singular): select then run a verb.
         Command::Scene(args) => {
             let env = ctx::require_game_env(game)?;
-            let handle = ctx::open_scene(&env, &args.name)?;
-            commands::file::run_verb(&handle, args.verb)
+            let (handle, location) = ctx::open_scene(&env, &args.name)?;
+            commands::file::run_verb(location, &handle, args.verb)
         }
         Command::File(args) => {
             let (env, relative) = ctx::open_file(game, &args.path)?;
             let handle = env.load_serialized(&relative)?;
-            commands::file::run_verb(&handle, args.verb)
+            commands::file::run_verb(
+                FileLocation::File(args.path.to_str().unwrap().to_owned()),
+                &handle,
+                args.verb,
+            )
         }
         Command::Bundle(args) => commands::bundle::run(game, args),
         Command::Addressable(args) => {

@@ -4,6 +4,7 @@
 use std::io::Write;
 
 use anyhow::{Context as _, Result, bail};
+use rabex_env::addressables::ArchivePath;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::objects::{ClassId, PPtr};
@@ -14,9 +15,23 @@ use rabex_env::unity::types::Transform;
 use crate::cli::{FileVerb, Format, ObjectVerb};
 use crate::component_path::{ComponentPath, Field, ObjectRef};
 
+pub enum FileLocation {
+    File(String),
+    Bundle { cab: String },
+}
+impl FileLocation {
+    pub fn external_name(&self) -> String {
+        match self {
+            FileLocation::File(name) => name.clone(),
+            FileLocation::Bundle { cab } => ArchivePath::same(cab).to_string(),
+        }
+    }
+}
+
 /// Run a [`FileVerb`] against a resolved serialized file. Shared by the
 /// `scene`, `file` and `bundle <path> file <cab>` commands.
-pub fn run_verb<R: EnvResolver, P: TypeTreeProvider>(
+pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
+    file_location: FileLocation,
     file: &SerializedFileHandle<'_, R, P>,
     verb: Option<FileVerb>,
 ) -> Result<()> {
@@ -39,6 +54,11 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider>(
                 ObjectVerb::Info => object_info(file, path_id, &mut out),
                 ObjectVerb::Cat(cat) => dump_path_id(file, path_id, cat.format, &mut out),
             }
+        }
+        FileVerb::References => {
+            let stdout = std::io::stdout();
+            let mut out = stdout.lock();
+            references(file_location, file, &mut out)
         }
     }
 }
@@ -77,6 +97,9 @@ pub fn info<R: EnvResolver, P: TypeTreeProvider>(
     writeln!(out, "  types: {}", file.m_Types.len())?;
     writeln!(out, "  objects: {}", file.objects().len())?;
     writeln!(out, "  externals: {}", file.m_Externals.len())?;
+    for external in file.externals_paths() {
+        writeln!(out, "  - {}", external)?;
+    }
     Ok(())
 }
 
@@ -378,5 +401,75 @@ fn pick<T>(matches: Vec<T>, field: &Field, kind: &str) -> Result<T> {
                 n - 1
             ),
         },
+    }
+}
+
+pub fn references<R: EnvResolver, P: TypeTreeProvider + Sync>(
+    file_location: FileLocation,
+    handle: &SerializedFileHandle<'_, R, P>,
+    out: &mut impl Write,
+) -> Result<()> {
+    let references =
+        find_references::external_references(handle.env, &file_location.external_name())?;
+    if references.is_empty() {
+        writeln!(out, "No references found")?;
+    }
+    for reference in references {
+        writeln!(out, "- {}", reference.display())?;
+    }
+
+    Ok(())
+}
+
+mod find_references {
+    use std::io::Cursor;
+    use std::path::PathBuf;
+
+    use rabex::files::SerializedFile;
+    use rabex::typetree::TypeTreeProvider;
+    use rabex_env::Environment;
+    use rabex_env::resolver::EnvResolver;
+
+    use anyhow::Result;
+    use rayon::iter::ParallelBridge as _;
+
+    /// Every file whose externals list `to`. Scans both the addressables
+    /// bundles and the plain serialized files in the game data directory
+    /// (`levelN`, `*.assets`, `globalgamemanagers`) — scene/level files live in
+    /// the latter, so omitting them misses most referrers.
+    pub fn external_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
+        env: &Environment<R, P>,
+        to: &str,
+    ) -> Result<Vec<PathBuf>> {
+        let mut referrers = rabex_env::utils::par_fold_reduce(
+            env.addressables_bundles()?.into_iter().par_bridge(),
+            |acc: &mut Vec<PathBuf>, bundle_path| {
+                let bundle = env.load_addressables_bundle(&bundle_path)?;
+                for entry in bundle.serialized_files() {
+                    let data = bundle.read_at_entry(entry)?;
+                    let file = SerializedFile::from_reader(&mut Cursor::new(data.as_slice()))?;
+                    if file.externals_paths().any(|external| external == to) {
+                        acc.push(bundle_path.clone());
+                        break;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+
+        let plain = rabex_env::utils::par_fold_reduce(
+            env.game_files.serialized_files()?.into_iter().par_bridge(),
+            |acc: &mut Vec<PathBuf>, path| {
+                let data = env.game_files.read_path(&path)?;
+                let file = SerializedFile::from_reader(&mut Cursor::new(data.as_ref()))?;
+                if file.externals_paths().any(|external| external == to) {
+                    acc.push(path);
+                }
+                Ok(())
+            },
+        )?;
+
+        referrers.extend(plain);
+        Ok(referrers)
     }
 }

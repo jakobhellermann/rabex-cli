@@ -205,6 +205,8 @@ pub enum FileVerb {
     Objects(ObjectsArgs),
     /// Inspect one object by path id or component path.
     Object(ObjectArgs),
+    /// Show who references this file
+    References,
 }
 
 #[derive(Args)]

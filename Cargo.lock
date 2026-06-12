@@ -811,6 +811,8 @@ dependencies = [
  "predicates",
  "rabex",
  "rabex-env",
+ "rayon",
+ "rustc-hash",
  "serde",
  "serde_json",
  "steamlocate",

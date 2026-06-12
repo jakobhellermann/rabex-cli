@@ -19,6 +19,7 @@ use rabex_env::resolver::game_files::LevelFiles;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::Context;
+use crate::commands::file::FileLocation;
 use crate::locate::locate_steam_game;
 
 const SCENE_INSTANCE_CLASS: &str = "UnityEngine.ResourceManagement.ResourceProviders.SceneInstance";
@@ -186,18 +187,32 @@ pub struct Scene {
     pub source: SceneSource,
 }
 
-/// Resolve a scene by name to a serialized-file handle.
-pub fn open_scene<'a>(env: &'a Environment, name: &str) -> Result<SerializedFileHandle<'a>> {
+/// Resolve a scene by name to a serialized-file handle and the location by
+/// which other files reference it (for the `references` verb).
+pub fn open_scene<'a>(
+    env: &'a Environment,
+    name: &str,
+) -> Result<(SerializedFileHandle<'a>, FileLocation)> {
     let scene = scenes(env)?
         .into_iter()
         .find(|scene| scene.name == name)
         .with_context(|| format!("no scene '{name}' in build settings or addressables catalog"))?;
 
     match scene.source {
-        SceneSource::Level(index) => env.load_serialized(format!("level{index}")),
+        SceneSource::Level(index) => {
+            let name = format!("level{index}");
+            let handle = env.load_serialized(&name)?;
+            Ok((handle, FileLocation::File(name)))
+        }
         SceneSource::Bundle(path) => {
             let bundle = env.load_addressables_bundle(&path)?;
-            bundle_serialized(env, &bundle, None)
+            let cab = bundle
+                .main_serializedfile()
+                .context("bundle contains no serialized file")?
+                .path
+                .clone();
+            let handle = bundle_serialized(env, &bundle, None)?;
+            Ok((handle, FileLocation::Bundle { cab }))
         }
     }
 }

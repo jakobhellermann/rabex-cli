@@ -10,7 +10,7 @@ use rabex_env::rabex::files::bundlefile::BundleFileReader;
 use rabex_env::rabex::files::unityfile::FileEntry;
 
 use crate::cli::{BundleArgs, BundleVerb, Context};
-use crate::commands::file;
+use crate::commands::file::{self, FileLocation};
 use crate::ctx;
 
 pub fn run(game: &Context, args: BundleArgs) -> Result<()> {
@@ -20,7 +20,8 @@ pub fn run(game: &Context, args: BundleArgs) -> Result<()> {
         BundleVerb::Files => list_files(&bundle),
         BundleVerb::File(file_args) => {
             let handle = ctx::bundle_serialized(&env, &bundle, Some(&file_args.cab))?;
-            file::run_verb(&handle, file_args.verb)
+            let source = FileLocation::Bundle { cab: file_args.cab };
+            file::run_verb(source, &handle, file_args.verb)
         }
     }
 }
