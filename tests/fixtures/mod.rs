@@ -98,37 +98,14 @@ impl Flat {
 /// Wrap raw serialized-file bytes into a minimal uncompressed UnityFS bundle
 /// holding a single serialized entry named `entry_name`.
 pub fn bundle_with_serialized(entry_name: &str, serialized: &[u8]) -> Vec<u8> {
-    use rabex_env::rabex::files::bundlefile::{
-        BundleFileHeader, BundleSignature, CompressionType, write_bundle,
-    };
-    use rabex_env::rabex::files::unityfile::FileEntry;
+    use rabex_env::rabex::files::bundlefile::CompressionType;
+    use rabex_env::rabex::files::bundlefile::builder::BundleFileBuilder;
 
     let unity_version: UnityVersion = TEST_UNITY_VERSION.parse().unwrap();
-    let header = BundleFileHeader {
-        signature: BundleSignature::UnityFS,
-        version: 7,
-        unity_version: "5.x.x".to_owned(),
-        unity_revision: Some(unity_version),
-        // `write_bundle` fills in the real size.
-        size: 0,
-    };
-
-    let files = [FileEntry {
-        offset: 0,
-        size: serialized.len() as i64,
-        flags: FileEntry::FLAG_SERIALIZEDFILE,
-        path: entry_name.to_owned(),
-    }];
+    let mut builder = BundleFileBuilder::unityfs(7, &unity_version);
+    builder.add_file(entry_name, serialized).unwrap();
 
     let mut out = Cursor::new(Vec::new());
-    write_bundle(
-        &header,
-        &mut out,
-        CompressionType::None,
-        CompressionType::None,
-        &files,
-        serialized,
-    )
-    .unwrap();
+    builder.write(&mut out, CompressionType::None).unwrap();
     out.into_inner()
 }
