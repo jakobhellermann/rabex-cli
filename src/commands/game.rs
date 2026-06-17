@@ -1,5 +1,6 @@
 //! Verbs that operate on a whole game (`info`, `ls`, `scenes`, `addressable`).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,8 @@ use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
 use rabex_env::addressables::binary_catalog::{ResourceLocation, resource_providers};
 use rabex_env::resolver::EnvResolver as _;
+use rabex_env::unity::types::MonoScript;
+use rabex_env::utils::par_fold_reduce;
 use serde::Serialize;
 
 use crate::cli::Format;
@@ -84,6 +87,90 @@ pub fn ls(env: &Environment, format: Format) -> Result<()> {
     let files = Files(env.game_files.serialized_files()?);
     let stdout = std::io::stdout();
     emit(&files, format, &mut stdout.lock())
+}
+
+/// One script and the files / addressables that contain its definition.
+#[derive(Serialize)]
+pub struct ScriptLocation {
+    script: String,
+    locations: Vec<String>,
+}
+
+/// Each script (`Namespace.Class`) with the files / addressables it lives in.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct ScriptLocations(pub Vec<ScriptLocation>);
+
+impl Render for ScriptLocations {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        for entry in &self.0 {
+            writeln!(out, "{}", entry.script)?;
+            for location in &entry.locations {
+                writeln!(out, "  {location}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A serialized file or an addressables bundle to scan for `MonoScript`s.
+enum UnityFile {
+    SerializedFile(PathBuf),
+    Bundle(PathBuf),
+}
+
+/// Map each script to the files / addressables whose `MonoScript` objects
+/// define it. Scans every serialized file and addressables bundle in parallel;
+/// `filter` keeps only scripts whose full name contains it (case-insensitive).
+pub fn script_locations(env: &Environment, filter: Option<&str>, format: Format) -> Result<()> {
+    let mut files: Vec<UnityFile> = env
+        .game_files
+        .serialized_files()?
+        .into_iter()
+        .map(UnityFile::SerializedFile)
+        .collect();
+    files.extend(
+        env.addressables_bundles()?
+            .into_iter()
+            .map(UnityFile::Bundle),
+    );
+
+    let by_script =
+        par_fold_reduce::<BTreeMap<String, BTreeSet<String>>, _>(files, |acc, file| {
+            let (handle, location) = match file {
+                UnityFile::SerializedFile(path) => {
+                    let location = path.display().to_string();
+                    (env.load_serialized(&path)?, location)
+                }
+                UnityFile::Bundle(bundle) => {
+                    let location = bundle.display().to_string();
+                    (env.load_addressables_bundle_content(&bundle)?, location)
+                }
+            };
+            for script in handle.objects_of::<MonoScript>() {
+                let script = script.read()?;
+                acc.entry(script.full_name().into_owned())
+                    .or_default()
+                    .insert(location.clone());
+            }
+            Ok(())
+        })?;
+
+    let filter = filter.map(str::to_ascii_lowercase);
+    let locations = by_script
+        .into_iter()
+        .filter(|(script, _)| match &filter {
+            Some(needle) => script.to_ascii_lowercase().contains(needle),
+            None => true,
+        })
+        .map(|(script, locations)| ScriptLocation {
+            script,
+            locations: locations.into_iter().collect(),
+        })
+        .collect();
+
+    let stdout = std::io::stdout();
+    emit(&ScriptLocations(locations), format, &mut stdout.lock())
 }
 
 /// Catalog overview: counts plus a breakdown of locations by provider and type.

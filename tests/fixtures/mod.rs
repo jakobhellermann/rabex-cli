@@ -21,7 +21,7 @@ use rabex_env::rabex::objects::{PPtr, TypedPPtr};
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::MemResolver;
-use rabex_env::unity::types::{ComponentPair, GameObject, Transform};
+use rabex_env::unity::types::{ComponentPair, GameObject, MonoScript, Transform};
 
 /// Unity version every fixture is built with. The embedded TPK has full
 /// coverage for it.
@@ -93,6 +93,30 @@ impl Flat {
 
         (sfb.write_vec().unwrap(), go_ids)
     }
+}
+
+/// A serialized file containing one `MonoScript` per class name (no namespace,
+/// so each script's `full_name` is just the class name).
+pub fn scripts_file(class_names: &[&str]) -> Vec<u8> {
+    let unity_version: UnityVersion = TEST_UNITY_VERSION.parse().unwrap();
+    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
+    let common = build_common_offset_map(&tpk.inner, &unity_version);
+    let mut sfb = SerializedFileBuilder::new(&unity_version, &tpk, &common, true);
+
+    for class_name in class_names {
+        let id = sfb.get_next_path_id();
+        let script = MonoScript {
+            m_Name: (*class_name).to_owned(),
+            m_ExecutionOrder: 0,
+            m_PropertiesHash: [0; 16],
+            m_ClassName: (*class_name).to_owned(),
+            m_Namespace: String::new(),
+            m_AssemblyName: "Assembly-CSharp.dll".to_owned(),
+        };
+        sfb.add_object_at(id, &script).unwrap();
+    }
+
+    sfb.write_vec().unwrap()
 }
 
 /// Wrap raw serialized-file bytes into a minimal uncompressed UnityFS bundle

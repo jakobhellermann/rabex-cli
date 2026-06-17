@@ -237,6 +237,54 @@ fn files_lists_serialized_files() {
 }
 
 #[test]
+fn game_script_locations_maps_scripts_to_files() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("level0"),
+        fixtures::scripts_file(&["HeroController", "EnemyController"]),
+    )
+    .unwrap();
+
+    let assert = rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["--format", "json", "game", "script-locations"])
+        .assert()
+        .success();
+
+    // Sorted by script name; each maps to the file it lives in.
+    assert_eq!(
+        stdout_json(&assert),
+        serde_json::json!([
+            { "script": "EnemyController", "locations": ["level0"] },
+            { "script": "HeroController", "locations": ["level0"] },
+        ])
+    );
+}
+
+#[test]
+fn game_script_locations_filter_narrows_by_name() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("level0"),
+        fixtures::scripts_file(&["HeroController", "EnemyController"]),
+    )
+    .unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["game", "script-locations", "hero"])
+        .assert()
+        .success()
+        .stdout("HeroController\n  level0\n");
+}
+
+#[test]
 fn game_info_reports_summary() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("Game_Data");

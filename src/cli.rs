@@ -82,6 +82,15 @@ pub struct GameArgs {
 pub enum GameVerb {
     /// Summary (unity version, file/addressable counts).
     Info,
+    /// Each script and the files / addressables that contain its definition.
+    ScriptLocations(ScriptLocationsArgs),
+}
+
+#[derive(Args)]
+pub struct ScriptLocationsArgs {
+    /// Only scripts whose full name contains this (case-insensitive).
+    #[arg(value_name = "FILTER")]
+    pub filter: Option<String>,
 }
 
 #[derive(Args)]

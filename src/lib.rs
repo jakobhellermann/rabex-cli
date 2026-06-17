@@ -25,6 +25,11 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         // Game summary.
         Command::Game(args) => match args.verb.unwrap_or(GameVerb::Info) {
             GameVerb::Info => commands::game::info(&ctx::require_game_env(game)?, format),
+            GameVerb::ScriptLocations(args) => commands::game::script_locations(
+                &ctx::require_game_env(game)?,
+                args.filter.as_deref(),
+                format,
+            ),
         },
 
         // Collections (plural). Bare and `list` both list.
