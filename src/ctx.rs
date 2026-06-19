@@ -6,17 +6,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
-use rabex_env::addressables::binary_catalog::resource_providers;
+use rabex_env::addressables::AddressablesData;
+use rabex_env::addressables::binary_catalog::{ResourceLocation, resource_providers};
 use rabex_env::env::Data;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
 use rabex_env::rabex::files::serializedfile::SerializedFile;
+use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::game_files::LevelFiles;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
+use rabex_env::unity::types::AssetBundle;
 
 use crate::cli::Context;
 use crate::commands::file::FileLocation;
@@ -215,6 +218,106 @@ pub fn open_scene<'a>(
             Ok((handle, FileLocation::Bundle { cab }))
         }
     }
+}
+
+/// The bundle (relative to the build folder) an addressable location lives in:
+/// itself if it is an `AssetBundle`, else its `AssetBundle` dependency.
+pub fn location_bundle(
+    addressables: &AddressablesData,
+    loc: &ResourceLocation,
+    build_folder: &Path,
+) -> Option<PathBuf> {
+    let internal_id = if loc.provider_id.as_str() == resource_providers::ASSET_BUNDLE {
+        &loc.internal_id
+    } else {
+        &loc.dependencies
+            .iter()
+            .find(|dep| dep.provider_id.as_str() == resource_providers::ASSET_BUNDLE)?
+            .internal_id
+    };
+    let path = addressables.evaluate_string(internal_id);
+    let path = Path::new(&path);
+    Some(path.strip_prefix(build_folder).unwrap_or(path).to_owned())
+}
+
+/// Resolve an addressables key to the serialized file (the bundle's main CAB)
+/// the asset lives in, the location for the `references` verb, and the path id
+/// of the asset the key points at (its container entry's `asset`).
+///
+/// Only `BundledAssetProvider` locations are backed by a CAB we can open; other
+/// providers (and keys resolving to several bundled assets) error with a hint.
+pub fn open_addressable<'a>(
+    env: &'a Environment,
+    key: &str,
+) -> Result<(SerializedFileHandle<'a>, FileLocation, PathId)> {
+    let addressables = env
+        .addressables()?
+        .context("this game has no addressables")?;
+    let build_folder = addressables.build_folder();
+
+    // The bundled locations of this key, each with the container key (its
+    // evaluated internal id) we later look the main asset up by.
+    let mut bundled = Vec::new();
+    let mut other_providers = Vec::new();
+    for mut catalog in addressables.catalogs(&env.game_files)? {
+        let catalog = catalog.read()?;
+        if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
+            for loc in locs {
+                if loc.provider_id.as_str() == resource_providers::BUNDLED_ASSET {
+                    if let Some(bundle) = location_bundle(addressables, loc, &build_folder) {
+                        let container_key = addressables.evaluate_string(&loc.internal_id);
+                        bundled.push((bundle, container_key));
+                    }
+                } else {
+                    other_providers.push(loc.provider_name().to_owned());
+                }
+            }
+        }
+    }
+
+    let (bundle_path, container_key) = match bundled.len() {
+        0 if other_providers.is_empty() => bail!("no addressable with key '{key}'"),
+        0 => bail!(
+            "addressable '{key}' has no BundledAsset location to open (provider(s): {}); \
+             see `addressable {key} info`",
+            other_providers.join(", ")
+        ),
+        1 => bundled.into_iter().next().unwrap(),
+        n => {
+            let bundles: Vec<_> = bundled
+                .iter()
+                .map(|(b, _)| b.display().to_string())
+                .collect();
+            bail!(
+                "addressable '{key}' resolves to {n} bundled assets ({}); \
+                 open the bundle directly with `bundle <path> file <cab>`",
+                bundles.join(", ")
+            )
+        }
+    };
+
+    let bundle = env.load_addressables_bundle(&bundle_path)?;
+    let cab = bundle
+        .main_serializedfile()
+        .context("bundle contains no serialized file")?
+        .path
+        .clone();
+    let handle = bundle_serialized(env, &bundle, None)?;
+
+    // The bundle's `AssetBundle` maps each container entry (the addressable's
+    // internal id) to the `PPtr` of its main asset.
+    let ab = handle
+        .objects_of::<AssetBundle>()
+        .next()
+        .context("bundle's main file has no AssetBundle object")?
+        .read()?;
+    let asset = ab
+        .m_Container
+        .get(&container_key)
+        .map(|entry| entry.asset.m_PathID)
+        .with_context(|| format!("AssetBundle container has no entry '{container_key}'"))?;
+
+    Ok((handle, FileLocation::Bundle { cab }, asset))
 }
 
 /// Every addressables key mapped to the distinct asset type names it resolves

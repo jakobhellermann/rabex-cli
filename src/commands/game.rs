@@ -390,7 +390,7 @@ pub fn addressable_info(
             primary_key: loc.primary_key.to_string(),
             internal_id: addressables.evaluate_string(&loc.internal_id),
             provider: loc.provider_name().to_owned(),
-            bundle: location_bundle(addressables, loc, &build_folder),
+            bundle: ctx::location_bundle(addressables, loc, &build_folder),
             dependencies: loc.dependencies.len(),
             dependency_labels: if list_deps {
                 loc.dependencies
@@ -428,26 +428,6 @@ fn dependency_label(
     } else {
         format!("{id}  ({})", dep.provider_name())
     }
-}
-
-/// The bundle (relative to the build folder) an addressable location lives in:
-/// itself if it is an `AssetBundle`, else its `AssetBundle` dependency.
-fn location_bundle(
-    addressables: &AddressablesData,
-    loc: &ResourceLocation,
-    build_folder: &Path,
-) -> Option<PathBuf> {
-    let internal_id = if loc.provider_id.as_str() == resource_providers::ASSET_BUNDLE {
-        &loc.internal_id
-    } else {
-        &loc.dependencies
-            .iter()
-            .find(|dep| dep.provider_id.as_str() == resource_providers::ASSET_BUNDLE)?
-            .internal_id
-    };
-    let path = addressables.evaluate_string(internal_id);
-    let path = Path::new(&path);
-    Some(path.strip_prefix(build_folder).unwrap_or(path).to_owned())
 }
 
 /// One scene with the source its data lives in.

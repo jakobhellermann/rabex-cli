@@ -13,8 +13,12 @@ pub mod commands {
 
 use anyhow::Result;
 
-use crate::cli::{AddressableVerb, AddressablesVerb, Command, GameVerb};
+use crate::cli::{
+    AddressableInfoArgs, AddressableVerb, AddressablesVerb, Command, FileVerb, GameVerb,
+    ObjectArgs, ObjectVerb,
+};
 use crate::commands::file::FileLocation;
+use crate::component_path::ObjectRef;
 
 /// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
 pub fn run(cli: crate::cli::Cli) -> Result<()> {
@@ -63,11 +67,30 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         Command::Bundle(args) => commands::bundle::run(game, args, format),
         Command::Addressable(args) => {
             let env = ctx::require_game_env(game)?;
-            let dependencies = match args.verb {
-                Some(AddressableVerb::Info(info)) => info.dependencies,
-                None => false,
-            };
-            commands::game::addressable_info(&env, &args.key, dependencies, format)
+            let verb = args
+                .verb
+                .unwrap_or(AddressableVerb::Info(AddressableInfoArgs {
+                    dependencies: false,
+                }));
+            match verb {
+                AddressableVerb::Info(info) => {
+                    commands::game::addressable_info(&env, &args.key, info.dependencies, format)
+                }
+                // `cat` is sugar for descending into the bundle's main CAB and
+                // dumping the container's main asset by path id.
+                AddressableVerb::Cat => {
+                    let (handle, location, asset) = ctx::open_addressable(&env, &args.key)?;
+                    let verb = FileVerb::Object(ObjectArgs {
+                        reference: ObjectRef::PathId(asset),
+                        verb: Some(ObjectVerb::Cat),
+                    });
+                    commands::file::run_verb(location, &handle, Some(verb), format)
+                }
+                AddressableVerb::File(file) => {
+                    let (handle, location, _asset) = ctx::open_addressable(&env, &args.key)?;
+                    commands::file::run_verb(location, &handle, file.verb, format)
+                }
+            }
         }
     }
 }

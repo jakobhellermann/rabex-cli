@@ -60,8 +60,8 @@ fn paths_to_candidates(paths: Vec<PathBuf>) -> Vec<CompletionCandidate> {
 }
 
 /// Resolve the serialized file selected on the command line and hand its handle
-/// to `f`. Handles `scene <name>`, `file <path>` and `bundle <path> file <cab>`.
-/// Returns no candidates when no such target is present.
+/// to `f`. Handles `scene <name>`, `file <path>`, `bundle <path> file <cab>` and
+/// `addressable <key> file`. Returns no candidates when no such target is present.
 fn with_target_handle(
     f: impl FnOnce(&Handle<'_>) -> Result<Vec<CompletionCandidate>>,
 ) -> Result<Vec<CompletionCandidate>> {
@@ -97,6 +97,14 @@ fn with_target_handle(
             };
             let (env, bundle) = ctx::open_bundle(&game, path)?;
             let handle = ctx::bundle_serialized(&env, &bundle, Some(cab))?;
+            f(&handle)
+        }
+        Some(("addressable", m)) => {
+            let Some(key) = m.get_one::<String>("key") else {
+                return Ok(Vec::new());
+            };
+            let env = ctx::require_game_env(&game)?;
+            let (handle, _location, _asset) = ctx::open_addressable(&env, key)?;
             f(&handle)
         }
         _ => Ok(Vec::new()),

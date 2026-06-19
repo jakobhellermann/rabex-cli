@@ -200,8 +200,13 @@ pub struct AddressableArgs {
 
 #[derive(Subcommand)]
 pub enum AddressableVerb {
-    /// Catalog location(s), bundle and dependency count.
+    /// Catalog location(s), bundle and dependency count (the default).
     Info(AddressableInfoArgs),
+    /// Dump the asset the key points at as JSON (PPtrs annotated with `$ref`).
+    Cat,
+    /// Inspect the asset's serialized file (the bundle's main CAB) with the
+    /// shared file verbs (`tree`, `objects`, `object <ref>`, `preloads`, …).
+    File(AddressableFileArgs),
 }
 
 #[derive(Args)]
@@ -209,6 +214,12 @@ pub struct AddressableInfoArgs {
     /// List each dependency bundle (default: just the count).
     #[arg(long)]
     pub dependencies: bool,
+}
+
+#[derive(Args)]
+pub struct AddressableFileArgs {
+    #[command(subcommand)]
+    pub verb: Option<FileVerb>,
 }
 
 // -----------------------------------------------------------------------------
