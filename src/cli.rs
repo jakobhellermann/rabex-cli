@@ -227,6 +227,18 @@ pub enum FileVerb {
     Object(ObjectArgs),
     /// Show who references this file
     References,
+    /// Show the AssetBundle preload table grouped per container entry.
+    Preloads(PreloadsArgs),
+}
+
+#[derive(Args)]
+pub struct PreloadsArgs {
+    /// Only show container entries whose address contains this substring.
+    #[arg(value_name = "ADDRESS")]
+    pub address: Option<String>,
+    /// Resolve the class of external preloaded objects too (loads dependency bundles; slower).
+    #[arg(long)]
+    pub resolve: bool,
 }
 
 #[derive(Args)]

@@ -14,6 +14,9 @@ use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::Transform;
 use serde::Serialize;
 
+use rabex_env::Environment;
+use rabex_env::unity::types::AssetBundle;
+
 use crate::cli::{FileVerb, Format, ObjectVerb};
 use crate::component_path::{ComponentPath, Field, ObjectRef};
 use crate::output::{Render, emit};
@@ -69,6 +72,11 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             }
         }
         FileVerb::References => emit(&references(file_location, file)?, format, &mut out),
+        FileVerb::Preloads(args) => emit(
+            &preloads(file, args.address.as_deref(), args.resolve)?,
+            format,
+            &mut out,
+        ),
     }
 }
 
@@ -219,6 +227,175 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     let mut value = object.read()?;
     crate::qualify::qualify(file, &mut value);
     Ok(value)
+}
+
+/// One preloaded object: where it lives and (when resolvable) its class.
+#[derive(Serialize)]
+pub struct PreloadRef {
+    /// `true` for objects in this CAB, `false` for objects in a dependency bundle.
+    local: bool,
+    path_id: PathId,
+    /// Class name; `None` for externals unless `--resolve` loaded the dependency bundle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class: Option<String>,
+    /// Readable dependency-bundle name for externals (else its archive path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bundle: Option<String>,
+}
+
+/// A container entry (addressable asset) and its preload-table slice.
+#[derive(Serialize)]
+pub struct PreloadEntry {
+    address: String,
+    asset: PreloadRef,
+    preload_index: i32,
+    preload_size: i32,
+    slice: Vec<PreloadRef>,
+}
+
+/// An `AssetBundle`'s preload table, grouped by container entry.
+#[derive(Serialize)]
+pub struct Preloads {
+    preload_table_len: usize,
+    container_len: usize,
+    dependencies: Vec<String>,
+    entries: Vec<PreloadEntry>,
+}
+
+impl Render for Preloads {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(
+            out,
+            "preload table: {} entries, container: {} entries, {} dependency bundle(s)",
+            self.preload_table_len,
+            self.container_len,
+            self.dependencies.len()
+        )?;
+        for entry in &self.entries {
+            writeln!(
+                out,
+                "\n■ {}  [{}..{}] ({} object(s))",
+                entry.address,
+                entry.preload_index,
+                entry.preload_index + entry.preload_size,
+                entry.preload_size
+            )?;
+            writeln!(out, "  asset: {}", render_ref(&entry.asset))?;
+            for r in &entry.slice {
+                writeln!(out, "    {}", render_ref(r))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn render_ref(r: &PreloadRef) -> String {
+    let class = r.class.as_deref().unwrap_or("?");
+    match (&r.bundle, r.local) {
+        (Some(bundle), _) => format!("EXT    {class:<22} #{}  @ {bundle}", r.path_id),
+        (None, true) => format!("local  {class:<22} #{}", r.path_id),
+        (None, false) => format!("EXT    {class:<22} #{}", r.path_id),
+    }
+}
+
+/// Build a [`PreloadRef`] for a PPtr. Local class ids are cheap (header lookup);
+/// external class ids are only resolved when `resolve` is set (loads the dep bundle).
+fn preload_ref<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    pptr: &PPtr,
+    resolve: bool,
+) -> PreloadRef {
+    if pptr.is_local() {
+        let class = file
+            .file
+            .get_object_info(pptr.m_PathID)
+            .map(|info| format!("{:?}", info.m_ClassID));
+        PreloadRef {
+            local: true,
+            path_id: pptr.m_PathID,
+            class,
+            bundle: None,
+        }
+    } else {
+        let bundle = pptr
+            .file_identifier(file.file)
+            .map(|ext| bundle_name(file.env, &ext.pathName));
+        let class = resolve
+            .then(|| {
+                file.deref::<()>(pptr.typed::<()>())
+                    .ok()
+                    .map(|o| format!("{:?}", o.class_id()))
+            })
+            .flatten();
+        PreloadRef {
+            local: false,
+            path_id: pptr.m_PathID,
+            class,
+            bundle,
+        }
+    }
+}
+
+/// Map an external archive path back to its readable bundle filename, if known.
+fn bundle_name<R: EnvResolver, P: TypeTreeProvider>(
+    env: &Environment<R, P>,
+    archive_path: &str,
+) -> String {
+    let Ok(Some(addr)) = env.addressables() else {
+        return archive_path.to_owned();
+    };
+    match ArchivePath::try_parse(std::path::Path::new(archive_path)) {
+        Ok(Some(ap)) => addr
+            .cab_to_bundle
+            .get(ap.bundle)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| archive_path.to_owned()),
+        _ => archive_path.to_owned(),
+    }
+}
+
+/// Build the [`Preloads`] view of a file's `AssetBundle` object.
+pub fn preloads<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    address_filter: Option<&str>,
+    resolve: bool,
+) -> Result<Preloads> {
+    let ab_handle = file
+        .objects_of::<AssetBundle>()
+        .next()
+        .context("file has no AssetBundle object (not a bundle's main CAB?)")?;
+    let ab = ab_handle.read()?;
+
+    let mut entries = Vec::new();
+    for (address, info) in &ab.m_Container {
+        if let Some(f) = address_filter
+            && !address.contains(f)
+        {
+            continue;
+        }
+        let range = info.preload_range();
+        let slice = ab
+            .m_PreloadTable
+            .get(range)
+            .unwrap_or_default()
+            .iter()
+            .map(|pptr| preload_ref(file, pptr, resolve))
+            .collect();
+        entries.push(PreloadEntry {
+            address: address.clone(),
+            asset: preload_ref(file, &info.asset, resolve),
+            preload_index: info.preloadIndex,
+            preload_size: info.preloadSize,
+            slice,
+        });
+    }
+
+    Ok(Preloads {
+        preload_table_len: ab.m_PreloadTable.len(),
+        container_len: ab.m_Container.len(),
+        dependencies: ab.m_Dependencies.clone(),
+        entries,
+    })
 }
 
 /// A node in the GameObject hierarchy [`Tree`].
