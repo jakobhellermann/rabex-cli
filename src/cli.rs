@@ -293,7 +293,15 @@ pub enum ObjectVerb {
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
     Cat,
     /// Find every object that references this one (local or from another file).
-    References,
+    References(ReferencesArgs),
+}
+
+#[derive(Args)]
+pub struct ReferencesArgs {
+    /// Also include preload-table references — `AssetBundle` / `PreloadData`
+    /// objects list the target as a load-time dependency, not a true user.
+    #[arg(long)]
+    pub include_preloads: bool,
 }
 
 use crate::component_path::ComponentPath;

@@ -218,6 +218,45 @@ fn file_object_references_resolves_names() {
         .stdout(predicates::str::contains("Transform (on 'Player')"));
 }
 
+/// `object <id> references` hides preload-table referrers (`PreloadData` /
+/// `AssetBundle`) by default; `--include-preloads` brings them back.
+#[test]
+fn file_object_references_filters_preloads() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    let (bytes, go_id) = fixtures::scene_with_preload("Player");
+    std::fs::write(data_dir.join("level0"), bytes).unwrap();
+
+    // Default: only the Transform (a real user); the PreloadData is hidden.
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["file", "level0", "object", &go_id.to_string(), "references"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("1 reference(s) to Player:"))
+        .stdout(predicates::str::contains("Transform (on 'Player')"))
+        .stdout(predicates::str::contains("PreloadData").count(0));
+
+    // With --include-preloads: the PreloadData referrer is listed too.
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &go_id.to_string(),
+            "references",
+            "--include-preloads",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("2 reference(s) to Player:"))
+        .stdout(predicates::str::contains("PreloadData"));
+}
+
 /// A malformed component path is rejected at parse time, before doing any work.
 #[test]
 fn file_object_rejects_bad_index() {

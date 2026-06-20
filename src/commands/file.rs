@@ -62,8 +62,8 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             match args.verb.unwrap_or(ObjectVerb::Info) {
                 ObjectVerb::Info => emit(&object_info(file, path_id)?, format, &mut out),
                 ObjectVerb::Cat => emit(&dump_path_id(file, path_id)?, format, &mut out),
-                ObjectVerb::References => emit(
-                    &object_references(&file_location, file, path_id)?,
+                ObjectVerb::References(args) => emit(
+                    &object_references(&file_location, file, path_id, args.include_preloads)?,
                     format,
                     &mut out,
                 ),
@@ -919,9 +919,11 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     file_location: &FileLocation,
     handle: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
+    include_preloads: bool,
 ) -> Result<ObjectReferences> {
     let target_file = file_location.external_name();
-    let mut referrers = find_references::referencing_objects(handle.env, &target_file, path_id)?;
+    let mut referrers =
+        find_references::referencing_objects(handle.env, &target_file, path_id, include_preloads)?;
     referrers.sort();
 
     // Resolve the target's own name for the header (e.g. the MonoScript's class name).
@@ -947,6 +949,7 @@ mod find_references {
 
     use anyhow::{Context as _, Result};
     use rabex::files::SerializedFile;
+    use rabex::objects::ClassId;
     use rabex::objects::pptr::PathId;
     use rabex::typetree::TypeTreeProvider;
     use rabex_env::Environment;
@@ -1004,6 +1007,7 @@ mod find_references {
         env: &Environment<R, P>,
         target_file: &str,
         target_path_id: PathId,
+        include_preloads: bool,
     ) -> Result<Vec<(String, PathId, String)>> {
         let from_bundles = rabex_env::utils::par_fold_reduce(
             env.addressables_bundles()?.into_iter().par_bridge(),
@@ -1024,7 +1028,15 @@ mod find_references {
                         continue;
                     }
                     let handle = SerializedFileHandle::new(env, &file, &data);
-                    scan_objects(&handle, &name, &display, target_file, target_path_id, acc)?;
+                    scan_objects(
+                        &handle,
+                        &name,
+                        &display,
+                        target_file,
+                        target_path_id,
+                        include_preloads,
+                        acc,
+                    )?;
                 }
                 Ok(())
             },
@@ -1040,7 +1052,15 @@ mod find_references {
                     return Ok(());
                 }
                 let handle = SerializedFileHandle::new(env, &file, data.as_ref());
-                scan_objects(&handle, &name, &name, target_file, target_path_id, acc)
+                scan_objects(
+                    &handle,
+                    &name,
+                    &name,
+                    target_file,
+                    target_path_id,
+                    include_preloads,
+                    acc,
+                )
             },
         )?;
 
@@ -1058,9 +1078,20 @@ mod find_references {
         display: &str,
         target_file: &str,
         target_path_id: PathId,
+        include_preloads: bool,
         acc: &mut Vec<(String, PathId, String)>,
     ) -> Result<()> {
         for object in handle.objects::<()>() {
+            // Preload tables (an AssetBundle's m_PreloadTable / a PreloadData's m_Assets) list
+            // the target as a load-time dependency, not a true user — skip them by default.
+            if !include_preloads
+                && matches!(
+                    object.class_id(),
+                    ClassId::AssetBundle | ClassId::PreloadData
+                )
+            {
+                continue;
+            }
             for pptr in object.reachable_one()? {
                 let referenced = match pptr.is_local() {
                     // a local PPtr points within `name`, so it can only hit the target object if

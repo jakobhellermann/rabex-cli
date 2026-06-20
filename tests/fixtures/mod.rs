@@ -21,7 +21,7 @@ use rabex_env::rabex::objects::{PPtr, TypedPPtr};
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::MemResolver;
-use rabex_env::unity::types::{ComponentPair, GameObject, MonoScript, Transform};
+use rabex_env::unity::types::{ComponentPair, GameObject, MonoScript, PreloadData, Transform};
 
 /// Unity version every fixture is built with. The embedded TPK has full
 /// coverage for it.
@@ -93,6 +93,50 @@ impl Flat {
 
         (sfb.write_vec().unwrap(), go_ids)
     }
+}
+
+/// A flat scene (one GameObject + Transform) plus a `PreloadData` whose
+/// `m_Assets` references that GameObject. Exercises preload-reference filtering:
+/// the GameObject is referenced both by its Transform (a real user) and by the
+/// PreloadData (a load-time dependency). Returns `(bytes, gameobject_path_id)`.
+pub fn scene_with_preload(name: &str) -> (Vec<u8>, PathId) {
+    let unity_version: UnityVersion = TEST_UNITY_VERSION.parse().unwrap();
+    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
+    let common = build_common_offset_map(&tpk.inner, &unity_version);
+    let mut sfb = SerializedFileBuilder::new(&unity_version, &tpk, &common, true);
+
+    let go_id = sfb.get_next_path_id();
+    let transform_id = sfb.get_next_path_id();
+    let go = GameObject {
+        m_Component: vec![ComponentPair {
+            component: PPtr::local(transform_id),
+        }],
+        m_Layer: 0,
+        m_Name: name.to_owned(),
+        m_Tag: 0,
+        m_IsActive: true,
+    };
+    sfb.add_object_at(go_id, &go).unwrap();
+    let transform = Transform {
+        m_GameObject: TypedPPtr::local(go_id),
+        m_LocalRotation: (0.0, 0.0, 0.0, 1.0),
+        m_LocalPosition: (0.0, 0.0, 0.0),
+        m_LocalScale: (1.0, 1.0, 1.0),
+        m_Children: Vec::new(),
+        m_Father: TypedPPtr::null(),
+    };
+    sfb.add_object_at(transform_id, &transform).unwrap();
+
+    let preload_id = sfb.get_next_path_id();
+    let preload = PreloadData {
+        m_Name: "preload".to_owned(),
+        m_Assets: vec![PPtr::local(go_id)],
+        m_Dependencies: Vec::new(),
+        m_ExplicitDataLayout: false,
+    };
+    sfb.add_object_at(preload_id, &preload).unwrap();
+
+    (sfb.write_vec().unwrap(), go_id)
 }
 
 /// A serialized file containing one `MonoScript` per class name (no namespace,
