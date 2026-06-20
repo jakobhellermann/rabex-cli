@@ -202,6 +202,69 @@ fn cat_dumps_component_by_path() {
 }
 
 #[test]
+fn objects_annotate_and_filter_monobehaviour_by_script() {
+    let (bytes, _go_id, mb_id) = fixtures::scene_with_script_component("Player", "PlayMakerFSM");
+
+    with_handle(PATH, bytes, |file| {
+        // A MonoBehaviour carries its resolved script class name.
+        let value = json(&file::list(file, Some("MonoBehaviour"), true).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!([{
+                "path_id": mb_id,
+                "class": "MonoBehaviour",
+                "script": "PlayMakerFSM",
+                "name": "",
+            }])
+        );
+
+        // `--type` matches by the script class name, not just the class.
+        let value = json(&file::list(file, Some("PlayMakerFSM"), true).unwrap());
+        assert_eq!(value.as_array().unwrap().len(), 1);
+        assert_eq!(value[0]["path_id"], mb_id);
+
+        // A class that matches nothing stays empty.
+        let value = json(&file::list(file, Some("Texture2D"), true).unwrap());
+        assert_eq!(value, serde_json::json!([]));
+    });
+}
+
+#[test]
+fn object_info_resolves_monobehaviour_script() {
+    let (bytes, _go_id, mb_id) = fixtures::scene_with_script_component("Player", "PlayMakerFSM");
+
+    with_handle(PATH, bytes, |file| {
+        let value = json(&file::object_info(file, mb_id).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "path_id": mb_id,
+                "class": "MonoBehaviour",
+                "script": "PlayMakerFSM",
+            })
+        );
+    });
+}
+
+#[test]
+fn find_component_matches_monobehaviour_script() {
+    let (bytes, go_id, mb_id) = fixtures::scene_with_script_component("Player", "PlayMakerFSM");
+
+    with_handle(PATH, bytes, |file| {
+        let value = json(&file::find_component(file, "PlayMakerFSM").unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!([{
+                "path": "Player@PlayMakerFSM",
+                "gameobject": "Player",
+                "gameobject_path_id": go_id,
+                "component_path_id": mb_id,
+            }])
+        );
+    });
+}
+
+#[test]
 fn find_component_lists_carrying_gameobjects() {
     let (bytes, go_ids) = Flat::new(&["Player"]).write();
 

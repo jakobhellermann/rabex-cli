@@ -14,14 +14,19 @@ use std::io::Cursor;
 use rabex_env::Environment;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::UnityVersion;
-use rabex_env::rabex::files::serializedfile::build_common_offset_map;
 use rabex_env::rabex::files::serializedfile::builder::SerializedFileBuilder;
-use rabex_env::rabex::objects::pptr::PathId;
-use rabex_env::rabex::objects::{PPtr, TypedPPtr};
+use rabex_env::rabex::files::serializedfile::{
+    LocalSerializedObjectIdentifier, SerializedType, build_common_offset_map,
+};
+use rabex_env::rabex::objects::pptr::{FileId, PathId};
+use rabex_env::rabex::objects::{ClassId, PPtr, TypedPPtr};
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
+use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::MemResolver;
-use rabex_env::unity::types::{ComponentPair, GameObject, MonoScript, PreloadData, Transform};
+use rabex_env::unity::types::{
+    ComponentPair, GameObject, MonoBehaviour, MonoScript, PreloadData, Transform,
+};
 
 /// Unity version every fixture is built with. The embedded TPK has full
 /// coverage for it.
@@ -161,6 +166,91 @@ pub fn scripts_file(class_names: &[&str]) -> Vec<u8> {
     }
 
     sfb.write_vec().unwrap()
+}
+
+/// A GameObject (`go_name`) with a Transform and a MonoBehaviour whose script
+/// class is `script_class`, plus the `MonoScript` it points at. Wires the
+/// script-type metadata (a `SerializedType` with `m_ScriptTypeIndex` into
+/// `m_ScriptTypes`) so `mono_script()` resolves the behaviour to its script.
+/// Returns `(bytes, gameobject_path_id, monobehaviour_path_id)`.
+pub fn scene_with_script_component(go_name: &str, script_class: &str) -> (Vec<u8>, PathId, PathId) {
+    let unity_version: UnityVersion = TEST_UNITY_VERSION.parse().unwrap();
+    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
+    let common = build_common_offset_map(&tpk.inner, &unity_version);
+    let mut sfb = SerializedFileBuilder::new(&unity_version, &tpk, &common, true);
+
+    let script_id = sfb.get_next_path_id();
+    let script = MonoScript {
+        m_Name: script_class.to_owned(),
+        m_ExecutionOrder: 0,
+        m_PropertiesHash: [0; 16],
+        m_ClassName: script_class.to_owned(),
+        m_Namespace: String::new(),
+        m_AssemblyName: "Assembly-CSharp.dll".to_owned(),
+    };
+    sfb.add_object_at(script_id, &script).unwrap();
+
+    let go_id = sfb.get_next_path_id();
+    let transform_id = sfb.get_next_path_id();
+    let mb_id = sfb.get_next_path_id();
+
+    let go = GameObject {
+        m_Component: vec![
+            ComponentPair {
+                component: PPtr::local(transform_id),
+            },
+            ComponentPair {
+                component: PPtr::local(mb_id),
+            },
+        ],
+        m_Layer: 0,
+        m_Name: go_name.to_owned(),
+        m_Tag: 0,
+        m_IsActive: true,
+    };
+    sfb.add_object_at(go_id, &go).unwrap();
+
+    let transform = Transform {
+        m_GameObject: TypedPPtr::local(go_id),
+        m_LocalRotation: (0.0, 0.0, 0.0, 1.0),
+        m_LocalPosition: (0.0, 0.0, 0.0),
+        m_LocalScale: (1.0, 1.0, 1.0),
+        m_Children: Vec::new(),
+        m_Father: TypedPPtr::null(),
+    };
+    sfb.add_object_at(transform_id, &transform).unwrap();
+
+    // The MonoBehaviour can't go through `add_object_at` (its `get_or_insert_type`
+    // refuses MonoBehaviour). Add a dedicated `SerializedType` whose
+    // `m_ScriptTypeIndex` selects an `m_ScriptTypes` entry pointing at the script,
+    // then attach the object to that type.
+    let mb_tt = sfb
+        .typetree_provider
+        .get_typetree_node(ClassId::MonoBehaviour, &unity_version)
+        .expect("MonoBehaviour typetree")
+        .into_owned();
+    let mut mb_type = SerializedType::simple(ClassId::MonoBehaviour, Some(mb_tt));
+    mb_type.m_ScriptTypeIndex = 0;
+    let type_id = sfb.add_type_uncached(mb_type);
+    sfb.serialized
+        .m_ScriptTypes
+        .as_mut()
+        .unwrap()
+        .push(LocalSerializedObjectIdentifier {
+            m_LocalSerializedFileIndex: FileId::LOCAL,
+            m_LocalIdentifierInFile: script_id,
+        });
+
+    let mb = MonoBehaviour {
+        m_GameObject: TypedPPtr::local(go_id),
+        m_Enabled: 1,
+        m_Script: TypedPPtr::local(script_id),
+        m_Name: String::new(),
+    };
+    sfb.add_object_with(&mb, mb_id, ClassId::MonoBehaviour, type_id)
+        .unwrap();
+
+    (sfb.write_vec().unwrap(), go_id, mb_id)
 }
 
 /// Wrap raw serialized-file bytes into a minimal uncompressed UnityFS bundle

@@ -91,6 +91,26 @@ fn file_objects_shows_names_by_default() {
         .stdout(predicates::str::contains("Camera"));
 }
 
+/// `objects --type <script>` matches MonoBehaviours by script class name and the
+/// listing shows the script as `(Script)`.
+#[test]
+fn file_objects_type_matches_monobehaviour_script() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    let (bytes, _go, _mb) = fixtures::scene_with_script_component("Player", "PlayMakerFSM");
+    std::fs::write(data_dir.join("level0"), bytes).unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["file", "level0", "objects", "--type", "PlayMakerFSM"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("MonoBehaviour"))
+        .stdout(predicates::str::contains("(PlayMakerFSM)"));
+}
+
 #[test]
 fn file_objects_type_filter() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
