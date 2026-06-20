@@ -211,9 +211,10 @@ impl Render for ObjectList {
     }
 }
 
-/// Collect `path_id`/`ClassId` for each object, optionally filtered to a single
-/// class name. Generic over the resolver so tests can drive it with an
-/// in-memory file. With `names`, each object's `m_Name` is read too.
+/// Collect `path_id`/`ClassId` for each object, optionally filtered by class
+/// name — or, for a MonoBehaviour, by its script class name (e.g. `PlayMakerFSM`).
+/// Generic over the resolver so tests can drive it with an in-memory file. With
+/// `names`, each object's `m_Name` is read too.
 pub fn list<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     type_filter: Option<&str>,
@@ -223,12 +224,24 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
     for obj in file.objects::<()>() {
         let class_id = obj.class_id();
         let class = format!("{class_id:?}");
+        let path_id = obj.path_id();
+
+        // A MonoBehaviour's script class name — needed for the label and to let
+        // `--type` match by script. `component_label` returns the class id string
+        // when the script can't be resolved, so drop that case.
+        let resolve_script = class_id == ClassId::MonoBehaviour && (names || type_filter.is_some());
+        let script = resolve_script
+            .then(|| component_label(file, PPtr::local(path_id)).ok())
+            .flatten()
+            .filter(|label| *label != class);
+
         if let Some(filter) = type_filter
             && class != *filter
+            && script.as_deref() != Some(filter)
         {
             continue;
         }
-        let path_id = obj.path_id();
+
         let name = names.then(|| {
             // Reading the name means deserializing the object; tolerate failures (e.g. a
             // MonoBehaviour whose script typetree isn't available) by leaving it blank.
@@ -238,16 +251,11 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
                 .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
                 .unwrap_or_default()
         });
-        // For a MonoBehaviour, resolve its script class name; `component_label`
-        // returns the class id string when the script can't be resolved.
-        let script = (names && class_id == ClassId::MonoBehaviour)
-            .then(|| component_label(file, PPtr::local(path_id)).ok())
-            .flatten()
-            .filter(|label| *label != class);
         objects.push(ObjectEntry {
             path_id,
             class,
-            script,
+            // Only surfaced with names; the filter use above doesn't need it shown.
+            script: if names { script } else { None },
             name,
         });
     }

@@ -161,15 +161,27 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
 }
 
 /// Object class names of the selected file (for `objects --type`): the distinct
-/// `ClassId` names across all objects.
+/// `ClassId` names, plus MonoBehaviour script class names (which `--type` also
+/// matches).
 pub fn object_types() -> Result<Vec<CompletionCandidate>> {
+    use rabex_env::rabex::objects::{ClassId, PPtr};
+
     with_target_handle(|handle| {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for obj in handle.objects::<()>() {
-            let class = format!("{:?}", obj.class_id());
+            let class_id = obj.class_id();
+            let class = format!("{class_id:?}");
             if seen.insert(class.clone()) {
-                out.push(CompletionCandidate::new(class));
+                out.push(CompletionCandidate::new(class.clone()));
+            }
+            if class_id == ClassId::MonoBehaviour
+                && let Ok(script) =
+                    crate::commands::file::component_label(handle, PPtr::local(obj.path_id()))
+                && script != class
+                && seen.insert(script.clone())
+            {
+                out.push(CompletionCandidate::new(script).help(Some("script".into())));
             }
         }
         Ok(out)
