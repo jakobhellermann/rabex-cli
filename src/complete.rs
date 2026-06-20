@@ -92,11 +92,11 @@ fn with_target_handle(
             let Some(("file", fm)) = m.subcommand() else {
                 return Ok(Vec::new());
             };
-            let Some(cab) = fm.get_one::<String>("cab") else {
-                return Ok(Vec::new());
-            };
             let (env, bundle) = ctx::open_bundle(&game, path)?;
-            let handle = ctx::bundle_serialized(&env, &bundle, Some(cab))?;
+            // `cab` is optional; without it the verb operates on the bundle's
+            // main serialized file, so complete against that one.
+            let cab = fm.get_one::<String>("cab").map(String::as_str);
+            let handle = ctx::bundle_serialized(&env, &bundle, cab)?;
             f(&handle)
         }
         Some(("addressable", m)) => {
@@ -112,7 +112,8 @@ fn with_target_handle(
 }
 
 /// Object references of the selected file (for `object <ref>`): every path id
-/// (labelled with class) and every component path. The shell filters by prefix.
+/// (labelled with class), every object's `m_Name`, and every component path. The
+/// shell filters by prefix.
 pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     with_target_handle(|handle| {
         let mut candidates: Vec<CompletionCandidate> = handle
@@ -122,8 +123,32 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
                     .help(Some(format!("{:?}", obj.class_id()).into()))
             })
             .collect();
+
+        // Component paths double as names for GameObjects; don't also offer the
+        // bare `m_Name` for those (it would resolve to the same object).
+        let paths = qualify::all_paths(handle);
+        let mut seen: std::collections::HashSet<String> =
+            paths.iter().map(|p| p.to_string()).collect();
+
+        // Objects selectable by `m_Name` (e.g. a `MonoScript`'s class name).
+        for obj in handle.objects::<()>() {
+            let class = obj.class_id();
+            let name = handle
+                .object_at::<serde_json::Value>(obj.path_id())
+                .and_then(|o| o.read())
+                .ok()
+                .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
+                .filter(|name| !name.is_empty());
+            if let Some(name) = name
+                && seen.insert(name.clone())
+            {
+                candidates
+                    .push(CompletionCandidate::new(name).help(Some(format!("{class:?}").into())));
+            }
+        }
+
         candidates.extend(
-            qualify::all_paths(handle)
+            paths
                 .into_iter()
                 .map(|path| CompletionCandidate::new(path.to_string())),
         );

@@ -182,9 +182,10 @@ pub enum BundleVerb {
 
 #[derive(Args)]
 pub struct BundleFileArgs {
-    /// Name of the file (CAB) inside the bundle.
+    /// Name of the file (CAB) inside the bundle; defaults to the bundle's main
+    /// serialized file.
     #[arg(value_name = "CAB", add = ArgValueCandidates::new(|| crate::complete::bundle_cabs().unwrap_or_default()))]
-    pub cab: String,
+    pub cab: Option<String>,
     #[command(subcommand)]
     pub verb: Option<FileVerb>,
 }
@@ -270,9 +271,6 @@ pub struct ObjectsArgs {
     /// Only list objects of this class (e.g. `MonoBehaviour`, `Texture2D`).
     #[arg(long)]
     pub r#type: Option<String>,
-    /// Also show each object's `m_Name` (slower: deserializes every listed object).
-    #[arg(long)]
-    pub names: bool,
 }
 
 // Path ids are i64 and routinely negative; let clap accept `-8333…` as the
@@ -280,7 +278,8 @@ pub struct ObjectsArgs {
 #[derive(Args)]
 #[command(allow_negative_numbers = true)]
 pub struct ObjectArgs {
-    /// A path id (e.g. `-8333…`) or a component path (`Root/Child@SpriteRenderer`).
+    /// A path id (e.g. `-8333…`), an object's `m_Name` (e.g. a `MonoScript`'s
+    /// `PlayMakerFSM`), or a component path (`Root/Child@SpriteRenderer`).
     #[arg(value_name = "REF", value_parser = crate::component_path::parse_object_ref, add = ArgValueCandidates::new(|| crate::complete::object_refs().unwrap_or_default()))]
     pub reference: ObjectRef,
     #[command(subcommand)]

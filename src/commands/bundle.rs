@@ -4,7 +4,7 @@
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rabex_env::Environment;
 use rabex_env::env::Data;
 use rabex_env::rabex::files::bundlefile::BundleFileReader;
@@ -24,8 +24,17 @@ pub fn run(game: &Context, args: BundleArgs, format: Format) -> Result<()> {
         BundleVerb::Info => emit(&info(&bundle), format, &mut out),
         BundleVerb::Files => emit(&list_files(&bundle), format, &mut out),
         BundleVerb::File(file_args) => {
-            let handle = ctx::bundle_serialized(&env, &bundle, Some(&file_args.cab))?;
-            let source = FileLocation::Bundle { cab: file_args.cab };
+            // Default to the bundle's main serialized file when no CAB is given.
+            let cab = match file_args.cab {
+                Some(cab) => cab,
+                None => bundle
+                    .main_serializedfile()
+                    .context("bundle contains no serialized file")?
+                    .path
+                    .clone(),
+            };
+            let handle = ctx::bundle_serialized(&env, &bundle, Some(&cab))?;
+            let source = FileLocation::Bundle { cab };
             file::run_verb(source, &handle, file_args.verb, format)
         }
     }

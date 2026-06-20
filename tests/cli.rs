@@ -76,6 +76,21 @@ fn file_objects_lists_objects() {
         .stdout(predicates::str::contains("Transform").count(2));
 }
 
+/// `objects` shows each object's `m_Name` by default (no `--names` flag).
+#[test]
+fn file_objects_shows_names_by_default() {
+    let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
+
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .arg("objects")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Player"))
+        .stdout(predicates::str::contains("Camera"));
+}
+
 #[test]
 fn file_objects_type_filter() {
     let (_tmp, path, _) = standalone_file(&["Player", "Camera"]);
@@ -382,6 +397,61 @@ fn bundle_file_object_cat_dumps_json() {
 
     let value = stdout_json(&assert);
     assert_eq!(value["m_Name"], "Player");
+}
+
+/// `bundle <path> file objects` without a CAB defaults to the bundle's main
+/// serialized file (and the trailing verb is not mistaken for the CAB).
+#[test]
+fn bundle_file_default_cab_lists_objects() {
+    let (_tmp, path, _) = standalone_bundle(&["Player", "Camera"]);
+
+    rabex()
+        .arg("bundle")
+        .arg(&path)
+        .args(["file", "objects"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("GameObject").count(2));
+}
+
+/// `bundle <path> file object <name>` selects an object by its `m_Name` — here a
+/// `MonoScript` in the bundle's main file, with the CAB left to default.
+#[test]
+fn bundle_file_object_by_name() {
+    let tmp = TempDir::new().unwrap();
+    let serialized = fixtures::scripts_file(&["PlayMakerFSM", "FsmTemplate"]);
+    let bytes = fixtures::bundle_with_serialized(BUNDLE_CAB, &serialized);
+    let path = tmp.path().join("monoscripts.bundle");
+    std::fs::write(&path, bytes).unwrap();
+
+    rabex()
+        .arg("bundle")
+        .arg(&path)
+        .args(["file", "object", "PlayMakerFSM", "info"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("MonoScript"))
+        .stdout(predicates::str::contains("PlayMakerFSM"));
+}
+
+/// `bundle <path> file object <TAB>` completes object refs even with the CAB
+/// left to default (the verb operates on the bundle's main serialized file).
+#[test]
+fn bundle_file_object_completes_with_default_cab() {
+    let tmp = TempDir::new().unwrap();
+    let serialized = fixtures::scripts_file(&["PlayMakerFSM", "FsmTemplate"]);
+    let bytes = fixtures::bundle_with_serialized(BUNDLE_CAB, &serialized);
+    let path = tmp.path().join("monoscripts.bundle");
+    std::fs::write(&path, bytes).unwrap();
+
+    rabex()
+        .env("COMPLETE", "fish")
+        .args(["--", "rabex", "bundle"])
+        .arg(&path)
+        .args(["file", "object", ""])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("PlayMakerFSM"));
 }
 
 /// A truncated bundle fails in the bundle reader rather than being misread.

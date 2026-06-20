@@ -54,11 +54,9 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             };
             emit(&tree(file, args.path, components)?, format, &mut out)
         }
-        FileVerb::Objects(args) => emit(
-            &list(file, args.r#type.as_deref(), args.names)?,
-            format,
-            &mut out,
-        ),
+        FileVerb::Objects(args) => {
+            emit(&list(file, args.r#type.as_deref(), true)?, format, &mut out)
+        }
         FileVerb::Object(args) => {
             let path_id = resolve_object_ref(file, &args.reference)?;
             match args.verb.unwrap_or(ObjectVerb::Info) {
@@ -599,8 +597,41 @@ pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
 ) -> Result<PathId> {
     match reference {
         ObjectRef::PathId(path_id) => Ok(*path_id),
-        ObjectRef::Path(path) => resolve_component_path(file, path),
+        // A single bare name (no `/` segments, no `@component`) can also select a
+        // non-GameObject object — e.g. a `MonoScript` named `PlayMakerFSM` — by its
+        // `m_Name`. Try the GameObject hierarchy first, then fall back to matching
+        // any object's `m_Name`.
+        ObjectRef::Path(path) => match path.segments.as_slice() {
+            [field] if path.component.is_none() => match resolve_component_path(file, path) {
+                Ok(path_id) => Ok(path_id),
+                Err(_) => resolve_object_by_name(file, field),
+            },
+            _ => resolve_component_path(file, path),
+        },
     }
+}
+
+/// Resolve a single object by its `m_Name`, across every object in the file
+/// (`field.index` disambiguates when several share a name).
+fn resolve_object_by_name<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    field: &Field,
+) -> Result<PathId> {
+    let mut matches = Vec::new();
+    for obj in file.objects::<()>() {
+        let path_id = obj.path_id();
+        // Reading the name deserializes the object; tolerate failures (e.g. a
+        // MonoBehaviour whose script typetree isn't available) by skipping it.
+        let name = file
+            .object_at::<serde_json::Value>(path_id)
+            .and_then(|o| o.read())
+            .ok()
+            .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned));
+        if name.as_deref() == Some(field.name.as_str()) {
+            matches.push(path_id);
+        }
+    }
+    pick(matches, field, "object")
 }
 
 /// Resolve a [`ComponentPath`] to the path id of its GameObject, or of the
@@ -820,7 +851,7 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
 
 mod find_references {
     use std::io::Cursor;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use anyhow::{Context as _, Result};
     use rabex::files::SerializedFile;
@@ -886,14 +917,10 @@ mod find_references {
             |acc: &mut Vec<(String, PathId)>, bundle_path| {
                 let bundle = env.load_addressables_bundle(&bundle_path)?;
                 let bundle_id = bundle
-                    .serialized_files()
-                    .find_map(|f| {
-                        Path::new(&f.path)
-                            .extension()
-                            .is_none()
-                            .then(|| f.path.clone())
-                    })
-                    .context("bundle has no main serialized file")?;
+                    .main_serializedfile()
+                    .context("bundle has no main serialized file")?
+                    .path
+                    .clone();
                 for entry in bundle.serialized_files() {
                     let name = ArchivePath::new(&bundle_id, &entry.path).to_string();
                     let data = bundle.read_at_entry(entry)?;
