@@ -194,6 +194,30 @@ fn file_object_cat_by_component_path() {
     assert!(value.get("m_GameObject").is_some(), "{value}");
 }
 
+/// `object <id> references` names the target by `m_Name` and labels each
+/// referrer with its class and the GameObject it sits on (here the GameObject's
+/// own Transform points back at it).
+#[test]
+fn file_object_references_resolves_names() {
+    let (_tmp, path, go_ids) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &go_ids[0].to_string(),
+            "references",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("1 reference(s) to Player:"))
+        .stdout(predicates::str::contains("Transform (on 'Player')"));
+}
+
 /// A malformed component path is rejected at parse time, before doing any work.
 #[test]
 fn file_object_rejects_bad_index() {

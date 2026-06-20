@@ -590,6 +590,60 @@ fn component_class_and_label<R: EnvResolver, P: TypeTreeProvider>(
     Ok((class_id, format!("{class_id:?}")))
 }
 
+/// An object's non-empty `m_Name`, if it has one (best-effort: `None` when the
+/// object can't be deserialized or has no/empty name).
+fn object_name<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+) -> Option<String> {
+    file.object_at::<serde_json::Value>(path_id)
+        .and_then(|o| o.read())
+        .ok()
+        .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
+        .filter(|name| !name.is_empty())
+}
+
+/// A human-readable label for an object that references something: its class
+/// (script class name for a MonoBehaviour) plus, when present, the GameObject it
+/// sits on (`X (on 'GO')`) or its own `m_Name` (`X 'name'`). Best-effort: falls
+/// back to the bare class, or an empty string when nothing can be read.
+fn referrer_label<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+) -> String {
+    let head = match component_class_and_label(file, PPtr::local(path_id)) {
+        Ok((_, label)) => label,
+        // The script (and thus its label) may be unresolvable; show the raw class.
+        Err(_) => match file.deref(PPtr::local(path_id).typed::<()>()) {
+            Ok(handle) => format!("{:?}", handle.class_id()),
+            Err(_) => return String::new(),
+        },
+    };
+
+    let value = file
+        .object_at::<serde_json::Value>(path_id)
+        .and_then(|o| o.read())
+        .ok();
+    // A component carries the GameObject it sits on; prefer that over its own name.
+    let go_name = value
+        .as_ref()
+        .and_then(|v| v.get("m_GameObject"))
+        .and_then(|g| g.get("m_PathID").and_then(serde_json::Value::as_i64))
+        .filter(|&id| id != 0)
+        .and_then(|go_id| object_name(file, go_id));
+    if let Some(go) = go_name {
+        return format!("{head} (on '{go}')");
+    }
+    match value
+        .as_ref()
+        .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()))
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => format!("{head} '{name}'"),
+        None => head,
+    }
+}
+
 /// Resolve an object reference (raw path id or component path) to a path id.
 pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
@@ -801,13 +855,19 @@ pub fn references<R: EnvResolver, P: TypeTreeProvider + Sync>(
 /// One object that references a target object.
 #[derive(Serialize)]
 pub struct Referrer {
+    /// Readable location: the bundle path, or the serialized file path.
     file: String,
     path_id: PathId,
+    /// Resolved object: its class / script name, plus its `m_Name` or the
+    /// GameObject it sits on. Empty when the object could not be deserialized.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    label: String,
 }
 
 /// Every object that references a target object (local or from another file).
 #[derive(Serialize)]
 pub struct ObjectReferences {
+    /// The target object's `m_Name` (e.g. a `MonoScript`'s class name), else `#<path id>`.
     target: String,
     path_id: PathId,
     referrers: Vec<Referrer>,
@@ -817,13 +877,38 @@ impl Render for ObjectReferences {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         writeln!(
             out,
-            "{} reference(s) to {}#{}:",
+            "{} reference(s) to {}:",
             self.referrers.len(),
-            self.target,
-            self.path_id
+            self.target
         )?;
+        // Pad the file and path-id columns to the width they need so the labels
+        // line up; the label itself is the last column and needs no padding.
+        let file_width = self
+            .referrers
+            .iter()
+            .map(|r| r.file.len())
+            .max()
+            .unwrap_or(0);
+        let id_width = self
+            .referrers
+            .iter()
+            .map(|r| r.path_id.to_string().len())
+            .max()
+            .unwrap_or(0);
         for referrer in &self.referrers {
-            writeln!(out, "- {} #{}", referrer.file, referrer.path_id)?;
+            if referrer.label.is_empty() {
+                writeln!(
+                    out,
+                    "- {:<file_width$}  {:>id_width$}",
+                    referrer.file, referrer.path_id
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "- {:<file_width$}  {:>id_width$}  {}",
+                    referrer.file, referrer.path_id, referrer.label
+                )?;
+            }
         }
         Ok(())
     }
@@ -835,16 +920,23 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     handle: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
 ) -> Result<ObjectReferences> {
-    let target = file_location.external_name();
-    let mut referrers = find_references::referencing_objects(handle.env, &target, path_id)?;
+    let target_file = file_location.external_name();
+    let mut referrers = find_references::referencing_objects(handle.env, &target_file, path_id)?;
     referrers.sort();
+
+    // Resolve the target's own name for the header (e.g. the MonoScript's class name).
+    let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
 
     Ok(ObjectReferences {
         target,
         path_id,
         referrers: referrers
             .into_iter()
-            .map(|(file, path_id)| Referrer { file, path_id })
+            .map(|(file, path_id, label)| Referrer {
+                file,
+                path_id,
+                label,
+            })
             .collect(),
     })
 }
@@ -903,7 +995,8 @@ mod find_references {
         Ok(referrers)
     }
 
-    /// Every object that references `(target_file, target_path_id)`, as `(referrer file, path id)`.
+    /// Every object that references `(target_file, target_path_id)`, as
+    /// `(readable location, path id, object label)`.
     ///
     /// Only files that list `target_file` in their externals (plus `target_file` itself, for local
     /// references) can reference the object, so the rest are skipped without scanning their objects.
@@ -911,16 +1004,18 @@ mod find_references {
         env: &Environment<R, P>,
         target_file: &str,
         target_path_id: PathId,
-    ) -> Result<Vec<(String, PathId)>> {
+    ) -> Result<Vec<(String, PathId, String)>> {
         let from_bundles = rabex_env::utils::par_fold_reduce(
             env.addressables_bundles()?.into_iter().par_bridge(),
-            |acc: &mut Vec<(String, PathId)>, bundle_path| {
+            |acc: &mut Vec<(String, PathId, String)>, bundle_path| {
                 let bundle = env.load_addressables_bundle(&bundle_path)?;
                 let bundle_id = bundle
                     .main_serializedfile()
                     .context("bundle has no main serialized file")?
                     .path
                     .clone();
+                // Referrers are reported by their (readable) bundle path, not the archive path.
+                let display = bundle_path.display().to_string();
                 for entry in bundle.serialized_files() {
                     let name = ArchivePath::new(&bundle_id, &entry.path).to_string();
                     let data = bundle.read_at_entry(entry)?;
@@ -929,7 +1024,7 @@ mod find_references {
                         continue;
                     }
                     let handle = SerializedFileHandle::new(env, &file, &data);
-                    scan_objects(&handle, &name, target_file, target_path_id, acc)?;
+                    scan_objects(&handle, &name, &display, target_file, target_path_id, acc)?;
                 }
                 Ok(())
             },
@@ -937,7 +1032,7 @@ mod find_references {
 
         let from_plain = rabex_env::utils::par_fold_reduce(
             env.game_files.serialized_files()?.into_iter().par_bridge(),
-            |acc: &mut Vec<(String, PathId)>, path| {
+            |acc: &mut Vec<(String, PathId, String)>, path| {
                 let data = env.game_files.read_path(&path)?;
                 let file = SerializedFile::from_reader(&mut Cursor::new(data.as_ref()))?;
                 let name = path.display().to_string();
@@ -945,7 +1040,7 @@ mod find_references {
                     return Ok(());
                 }
                 let handle = SerializedFileHandle::new(env, &file, data.as_ref());
-                scan_objects(&handle, &name, target_file, target_path_id, acc)
+                scan_objects(&handle, &name, &name, target_file, target_path_id, acc)
             },
         )?;
 
@@ -954,13 +1049,16 @@ mod find_references {
         Ok(referrers)
     }
 
-    /// Collect objects in `handle` whose reachable PPtrs point at `(target_file, target_path_id)`.
+    /// Collect objects in `handle` whose reachable PPtrs point at `(target_file, target_path_id)`,
+    /// reported under `display` with a human-readable label. One entry per referring object even if
+    /// it points at the target through several fields.
     fn scan_objects<R: EnvResolver, P: TypeTreeProvider>(
         handle: &SerializedFileHandle<'_, R, P>,
         name: &str,
+        display: &str,
         target_file: &str,
         target_path_id: PathId,
-        acc: &mut Vec<(String, PathId)>,
+        acc: &mut Vec<(String, PathId, String)>,
     ) -> Result<()> {
         for object in handle.objects::<()>() {
             for pptr in object.reachable_one()? {
@@ -974,7 +1072,10 @@ mod find_references {
                     },
                 };
                 if referenced == target_file && pptr.m_PathID == target_path_id {
-                    acc.push((name.to_owned(), object.path_id()));
+                    let path_id = object.path_id();
+                    let label = super::referrer_label(handle, path_id);
+                    acc.push((display.to_owned(), path_id, label));
+                    break;
                 }
             }
         }
