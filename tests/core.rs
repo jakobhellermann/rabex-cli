@@ -202,6 +202,28 @@ fn cat_dumps_component_by_path() {
 }
 
 #[test]
+fn find_component_lists_carrying_gameobjects() {
+    let (bytes, go_ids) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        let value = json(&file::find_component(file, "Transform").unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!([{
+                "path": "Player@Transform",
+                "gameobject": "Player",
+                "gameobject_path_id": go_ids[0],
+                "component_path_id": go_ids[0] + 1,
+            }])
+        );
+
+        // An unknown type yields an empty array, not an error.
+        let value = json(&file::find_component(file, "NopeManager").unwrap());
+        assert_eq!(value, serde_json::json!([]));
+    });
+}
+
+#[test]
 fn obj_resolves_by_class_name() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 

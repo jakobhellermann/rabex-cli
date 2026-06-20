@@ -241,6 +241,15 @@ pub enum FileVerb {
     References,
     /// Show the AssetBundle preload table grouped per container entry.
     Preloads(PreloadsArgs),
+    /// Find which GameObject(s) carry a component / script of the given type.
+    Find(FindArgs),
+}
+
+#[derive(Args)]
+pub struct FindArgs {
+    /// Component class name, or MonoBehaviour script name (e.g. `ToolItemManager`).
+    #[arg(value_name = "TYPE", add = ArgValueCandidates::new(|| crate::complete::component_types().unwrap_or_default()))]
+    pub r#type: String,
 }
 
 #[derive(Args)]

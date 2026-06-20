@@ -75,6 +75,7 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             format,
             &mut out,
         ),
+        FileVerb::Find(args) => emit(&find_component(file, &args.r#type)?, format, &mut out),
     }
 }
 
@@ -564,6 +565,75 @@ fn build_node<R: EnvResolver, P: TypeTreeProvider>(
         components: component_labels,
         children,
     }))
+}
+
+/// One GameObject carrying a component of the searched-for type.
+#[derive(Serialize)]
+pub struct ComponentMatch {
+    /// A re-usable component path, e.g. `_GameManager@ToolItemManager`.
+    path: String,
+    /// The carrying GameObject's name (the path's leaf).
+    gameobject: String,
+    gameobject_path_id: PathId,
+    /// Path id of the matching component itself (`object #<id>` to inspect it).
+    component_path_id: PathId,
+}
+
+/// Every GameObject carrying a component of the searched-for type.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct ComponentMatches(pub Vec<ComponentMatch>);
+
+impl Render for ComponentMatches {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        for m in &self.0 {
+            writeln!(
+                out,
+                "{}  (GameObject #{}, component #{})",
+                m.path, m.gameobject_path_id, m.component_path_id
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Find every GameObject in the file's hierarchy carrying a component whose label
+/// (class name, or script class name for a MonoBehaviour) equals `type_name`.
+/// Reuses the canonical component paths so each result round-trips through
+/// `object <path>` / `tree <path>`.
+pub fn find_component<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    type_name: &str,
+) -> Result<ComponentMatches> {
+    let mut matches = Vec::new();
+    for path in crate::qualify::all_paths(file) {
+        let Some(component) = &path.component else {
+            continue;
+        };
+        if component.name != type_name {
+            continue;
+        }
+        // Paths from `all_paths` are canonical (indices already disambiguated), so
+        // resolving them back is unambiguous.
+        let component_path_id = resolve_component_path(file, &path)?;
+        let go_path = ComponentPath {
+            segments: path.segments.clone(),
+            component: None,
+        };
+        let gameobject_path_id = resolve_component_path(file, &go_path)?;
+        let gameobject = path
+            .segments
+            .last()
+            .map(|f| f.name.clone())
+            .unwrap_or_default();
+        matches.push(ComponentMatch {
+            path: path.to_string(),
+            gameobject,
+            gameobject_path_id,
+            component_path_id,
+        });
+    }
+    Ok(ComponentMatches(matches))
 }
 
 /// A component's class name, or the script's class name for a MonoBehaviour.

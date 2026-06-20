@@ -160,6 +160,23 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     })
 }
 
+/// Component/script type names of the selected file (for `find <TYPE>`): the
+/// distinct `@component` labels across the hierarchy.
+pub fn component_types() -> Result<Vec<CompletionCandidate>> {
+    with_target_handle(|handle| {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for path in qualify::all_paths(handle) {
+            if let Some(component) = path.component
+                && seen.insert(component.name.clone())
+            {
+                out.push(CompletionCandidate::new(component.name));
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// GameObject paths of the selected file (for `tree <path>`): the component
 /// paths without a `@component` selector.
 pub fn gameobject_paths() -> Result<Vec<CompletionCandidate>> {

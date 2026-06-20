@@ -257,6 +257,22 @@ fn file_object_references_filters_preloads() {
         .stdout(predicates::str::contains("PreloadData"));
 }
 
+/// `file <path> find <TYPE>` lists the GameObject(s) carrying that component,
+/// with a re-usable component path.
+#[test]
+fn file_find_lists_component_holders() {
+    let (_tmp, path, _) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args(["file", "level0", "find", "Transform"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Player@Transform"));
+}
+
 /// A malformed component path is rejected at parse time, before doing any work.
 #[test]
 fn file_object_rejects_bad_index() {
