@@ -112,8 +112,9 @@ fn with_target_handle(
 }
 
 /// Object references of the selected file (for `object <ref>`): every path id
-/// (labelled with class), every object's `m_Name`, and every component path. The
-/// shell filters by prefix.
+/// (labelled with class), every object's `m_Name`, every class name (for
+/// singletons like `TagManager`), and every component path. The shell filters by
+/// prefix.
 pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     with_target_handle(|handle| {
         let mut candidates: Vec<CompletionCandidate> = handle
@@ -130,9 +131,13 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
         let mut seen: std::collections::HashSet<String> =
             paths.iter().map(|p| p.to_string()).collect();
 
-        // Objects selectable by `m_Name` (e.g. a `MonoScript`'s class name).
         for obj in handle.objects::<()>() {
-            let class = obj.class_id();
+            let class = format!("{:?}", obj.class_id());
+            // Selectable by class name (deduped) — useful for class-typed singletons.
+            if seen.insert(class.clone()) {
+                candidates.push(CompletionCandidate::new(class.clone()).help(Some("class".into())));
+            }
+            // Selectable by `m_Name` (e.g. a `MonoScript`'s class name).
             let name = handle
                 .object_at::<serde_json::Value>(obj.path_id())
                 .and_then(|o| o.read())
@@ -142,8 +147,7 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
             if let Some(name) = name
                 && seen.insert(name.clone())
             {
-                candidates
-                    .push(CompletionCandidate::new(name).help(Some(format!("{class:?}").into())));
+                candidates.push(CompletionCandidate::new(name).help(Some(class.into())));
             }
         }
 

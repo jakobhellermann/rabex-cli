@@ -652,9 +652,10 @@ pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     match reference {
         ObjectRef::PathId(path_id) => Ok(*path_id),
         // A single bare name (no `/` segments, no `@component`) can also select a
-        // non-GameObject object — e.g. a `MonoScript` named `PlayMakerFSM` — by its
-        // `m_Name`. Try the GameObject hierarchy first, then fall back to matching
-        // any object's `m_Name`.
+        // non-GameObject object by its `m_Name` (e.g. a `MonoScript` named
+        // `PlayMakerFSM`) or, for class-typed singletons, by its class name (e.g.
+        // `TagManager` in `globalgamemanagers`). Try the GameObject hierarchy
+        // first, then fall back to a name/class match.
         ObjectRef::Path(path) => match path.segments.as_slice() {
             [field] if path.component.is_none() => match resolve_component_path(file, path) {
                 Ok(path_id) => Ok(path_id),
@@ -665,15 +666,20 @@ pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     }
 }
 
-/// Resolve a single object by its `m_Name`, across every object in the file
-/// (`field.index` disambiguates when several share a name).
+/// Resolve a single object by its `m_Name`, or — when nothing is named that —
+/// by its class name (for class-typed singletons like `TagManager`). Scans every
+/// object in the file; `field.index` disambiguates when several match.
 fn resolve_object_by_name<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     field: &Field,
 ) -> Result<PathId> {
-    let mut matches = Vec::new();
+    let mut by_name = Vec::new();
+    let mut by_class = Vec::new();
     for obj in file.objects::<()>() {
         let path_id = obj.path_id();
+        if format!("{:?}", obj.class_id()) == field.name {
+            by_class.push(path_id);
+        }
         // Reading the name deserializes the object; tolerate failures (e.g. a
         // MonoBehaviour whose script typetree isn't available) by skipping it.
         let name = file
@@ -682,9 +688,15 @@ fn resolve_object_by_name<R: EnvResolver, P: TypeTreeProvider>(
             .ok()
             .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned));
         if name.as_deref() == Some(field.name.as_str()) {
-            matches.push(path_id);
+            by_name.push(path_id);
         }
     }
+    // Prefer name matches; class matches are the fallback for unnamed singletons.
+    let matches = if by_name.is_empty() {
+        by_class
+    } else {
+        by_name
+    };
     pick(matches, field, "object")
 }
 

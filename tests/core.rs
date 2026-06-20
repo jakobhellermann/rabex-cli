@@ -202,6 +202,20 @@ fn cat_dumps_component_by_path() {
 }
 
 #[test]
+fn obj_resolves_by_class_name() {
+    let (bytes, _) = Flat::new(&["Player"]).write();
+
+    with_handle(PATH, bytes, |file| {
+        // "Transform" is neither a hierarchy name nor an m_Name here, so it
+        // resolves by class — the GameObject's sole component.
+        let path_id =
+            file::resolve_object_ref(file, &parse_object_ref("Transform").unwrap()).unwrap();
+        let value = file::dump_path_id(file, path_id).unwrap();
+        assert_eq!(value["m_GameObject"]["$ref"], "Player");
+    });
+}
+
+#[test]
 fn cat_missing_path_errors() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 

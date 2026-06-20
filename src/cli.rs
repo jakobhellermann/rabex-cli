@@ -279,7 +279,8 @@ pub struct ObjectsArgs {
 #[command(allow_negative_numbers = true)]
 pub struct ObjectArgs {
     /// A path id (e.g. `-8333…`), an object's `m_Name` (e.g. a `MonoScript`'s
-    /// `PlayMakerFSM`), or a component path (`Root/Child@SpriteRenderer`).
+    /// `PlayMakerFSM`), a class name for a singleton (e.g. `TagManager`), or a
+    /// component path (`Root/Child@SpriteRenderer`).
     #[arg(value_name = "REF", value_parser = crate::component_path::parse_object_ref, add = ArgValueCandidates::new(|| crate::complete::object_refs().unwrap_or_default()))]
     pub reference: ObjectRef,
     #[command(subcommand)]
