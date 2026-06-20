@@ -43,7 +43,9 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         Command::Addressables(args) => {
             let env = ctx::require_game_env(game)?;
             match args.verb.unwrap_or(AddressablesVerb::List) {
-                AddressablesVerb::List => commands::game::addressable_ls(&env, format),
+                AddressablesVerb::List => {
+                    commands::game::addressable_ls(&env, args.include_asset_bundles, format)
+                }
                 AddressablesVerb::Stats => commands::game::addressable_stats(&env, format),
             }
         }

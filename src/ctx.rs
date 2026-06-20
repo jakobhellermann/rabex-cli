@@ -322,12 +322,28 @@ pub fn open_addressable<'a>(
 
 /// Every addressables key mapped to the distinct asset type names it resolves
 /// to (e.g. `AreaAbyss` → {`AtmosCue`, `MusicCue`}). Empty without addressables.
-pub fn addressable_keys(env: &Environment) -> Result<BTreeMap<String, BTreeSet<String>>> {
+///
+/// Unless `include_asset_bundles` is set, keys that resolve only to `AssetBundle`
+/// resources (the internal `*.bundle` provider entries, `IAssetBundleResource`)
+/// are skipped — they're load-machinery keys, not user-facing assets, and can't
+/// be opened as an addressable anyway (use `bundle <path>` for those).
+pub fn addressable_keys(
+    env: &Environment,
+    include_asset_bundles: bool,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
     let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if let Some(addressables) = env.addressables()? {
         for mut catalog in addressables.catalogs(&env.game_files)? {
             let catalog = catalog.read()?;
             for (key, locations) in &catalog.resources {
+                if !include_asset_bundles
+                    && !locations.is_empty()
+                    && locations
+                        .iter()
+                        .all(|loc| loc.provider_id.as_str() == resource_providers::ASSET_BUNDLE)
+                {
+                    continue;
+                }
                 let types = keys.entry(key.to_string()).or_default();
                 for loc in locations {
                     types.insert(loc.type_.class_name().to_owned());

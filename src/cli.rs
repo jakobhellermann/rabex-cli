@@ -130,6 +130,10 @@ pub enum BundlesVerb {
 pub struct AddressablesArgs {
     #[command(subcommand)]
     pub verb: Option<AddressablesVerb>,
+    /// Also list internal `AssetBundle` resource keys (`IAssetBundleResource`),
+    /// hidden by default. Inspect those with `bundle <path>` instead.
+    #[arg(long)]
+    pub include_asset_bundles: bool,
 }
 #[derive(Subcommand)]
 pub enum AddressablesVerb {

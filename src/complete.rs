@@ -235,7 +235,8 @@ pub fn addressable_keys() -> Result<Vec<CompletionCandidate>> {
     let Some(env) = current_game_env()? else {
         return Ok(Vec::new());
     };
-    Ok(ctx::addressable_keys(&env)?
+    // Mirror the default `addressables` listing: omit internal AssetBundle keys.
+    Ok(ctx::addressable_keys(&env, false)?
         .into_iter()
         .map(|(key, types)| {
             let help = types.into_iter().collect::<Vec<_>>().join(", ");

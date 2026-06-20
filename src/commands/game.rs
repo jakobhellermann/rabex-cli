@@ -285,8 +285,12 @@ impl Render for AddressableKeys {
 }
 
 /// List every addressables key with the asset type(s) it resolves to.
-pub fn addressable_ls(env: &Environment, format: Format) -> Result<()> {
-    let keys = ctx::addressable_keys(env)?
+pub fn addressable_ls(
+    env: &Environment,
+    include_asset_bundles: bool,
+    format: Format,
+) -> Result<()> {
+    let keys = ctx::addressable_keys(env, include_asset_bundles)?
         .into_iter()
         .map(|(key, types)| AddressableKey {
             key,
