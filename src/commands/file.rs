@@ -17,7 +17,7 @@ use serde::Serialize;
 use rabex_env::Environment;
 use rabex_env::unity::types::AssetBundle;
 
-use crate::cli::{FileVerb, Format, ObjectVerb};
+use crate::cli::{FileVerb, Format, InfoArgs, ObjectVerb};
 use crate::component_path::{ComponentPath, Field, ObjectRef};
 use crate::output::{Render, emit};
 
@@ -44,8 +44,8 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
 ) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match verb.unwrap_or(FileVerb::Info) {
-        FileVerb::Info => emit(&info(file)?, format, &mut out),
+    match verb.unwrap_or_else(|| FileVerb::Info(InfoArgs::default())) {
+        FileVerb::Info(args) => emit(&info(file, args.externals)?, format, &mut out),
         FileVerb::Tree(args) => {
             let components = match (args.components, args.scripts) {
                 (_, true) => Components::Scripts,
@@ -101,7 +101,11 @@ pub struct FileInfo {
     type_tree: bool,
     types: usize,
     objects: usize,
-    externals: Vec<String>,
+    externals: usize,
+    /// The external files (resolved to readable bundle paths); only populated
+    /// with `info --externals`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    external_bundles: Vec<String>,
 }
 
 impl Render for FileInfo {
@@ -118,20 +122,33 @@ impl Render for FileInfo {
         writeln!(out, "  type tree: {}", self.type_tree)?;
         writeln!(out, "  types: {}", self.types)?;
         writeln!(out, "  objects: {}", self.objects)?;
-        writeln!(out, "  externals: {}", self.externals.len())?;
-        for external in &self.externals {
+        writeln!(out, "  externals: {}", self.externals)?;
+        for external in &self.external_bundles {
             writeln!(out, "  - {external}")?;
         }
         Ok(())
     }
 }
 
-/// Build the header information + type count for a serialized file.
+/// Build the header information + type count for a serialized file. With
+/// `externals`, the external files are listed (resolved to bundle paths); else
+/// only their count is reported.
 pub fn info<R: EnvResolver, P: TypeTreeProvider>(
     handle: &SerializedFileHandle<'_, R, P>,
+    externals: bool,
 ) -> Result<FileInfo> {
     let file = handle.file;
     let header = &file.m_Header;
+
+    // Resolve `archive:/CAB-…` externals to their readable bundle path; other
+    // externals (e.g. `Library/unity default resources`) are left as-is.
+    let external_bundles = if externals {
+        file.externals_paths()
+            .map(|external| bundle_name(handle.env, external))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(FileInfo {
         unity_version: file.m_UnityVersion.as_ref().map(|v| v.to_string()),
@@ -141,12 +158,8 @@ pub fn info<R: EnvResolver, P: TypeTreeProvider>(
         type_tree: file.m_EnableTypeTree,
         types: file.m_Types.len(),
         objects: file.objects().len(),
-        // Resolve `archive:/CAB-…` externals to their readable bundle path; other
-        // externals (e.g. `Library/unity default resources`) are left as-is.
-        externals: file
-            .externals_paths()
-            .map(|external| bundle_name(handle.env, external))
-            .collect(),
+        externals: file.externals_paths().count(),
+        external_bundles,
     })
 }
 

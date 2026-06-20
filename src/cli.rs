@@ -234,7 +234,7 @@ pub struct AddressableFileArgs {
 #[derive(Subcommand)]
 pub enum FileVerb {
     /// Show header info (version, types, object/external counts).
-    Info,
+    Info(InfoArgs),
     /// Print the Transform hierarchy.
     Tree(TreeArgs),
     /// List the objects (`path_id  ClassId`).
@@ -247,6 +247,14 @@ pub enum FileVerb {
     Preloads(PreloadsArgs),
     /// Find which GameObject(s) carry a component / script of the given type.
     Find(FindArgs),
+}
+
+#[derive(Args, Default)]
+pub struct InfoArgs {
+    /// List the external files (resolved to readable bundle paths); default: just
+    /// the count.
+    #[arg(long)]
+    pub externals: bool,
 }
 
 #[derive(Args)]
