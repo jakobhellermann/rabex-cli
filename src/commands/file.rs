@@ -141,7 +141,12 @@ pub fn info<R: EnvResolver, P: TypeTreeProvider>(
         type_tree: file.m_EnableTypeTree,
         types: file.m_Types.len(),
         objects: file.objects().len(),
-        externals: file.externals_paths().map(str::to_owned).collect(),
+        // Resolve `archive:/CAB-…` externals to their readable bundle path; other
+        // externals (e.g. `Library/unity default resources`) are left as-is.
+        externals: file
+            .externals_paths()
+            .map(|external| bundle_name(handle.env, external))
+            .collect(),
     })
 }
 
