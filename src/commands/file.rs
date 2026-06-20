@@ -163,12 +163,15 @@ pub fn info<R: EnvResolver, P: TypeTreeProvider>(
     })
 }
 
-/// One object in an [`ObjectList`]: its path id and class, plus its `m_Name`
-/// when `objects --names` requested it.
+/// One object in an [`ObjectList`]: its path id and class. With names, also the
+/// MonoBehaviour's script class name and/or the object's `m_Name`.
 #[derive(Serialize)]
 pub struct ObjectEntry {
     path_id: PathId,
     class: String,
+    /// The script class name for a MonoBehaviour (shown as `(Script)`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
 }
@@ -180,16 +183,29 @@ pub struct ObjectList(pub Vec<ObjectEntry>);
 
 impl Render for ObjectList {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        let with_names = self.0.iter().any(|o| o.name.is_some());
+        let with_label = self
+            .0
+            .iter()
+            .any(|o| o.name.is_some() || o.script.is_some());
         for obj in &self.0 {
             let id = style::dim(&format!("{:>12}", obj.path_id));
-            if with_names {
-                let class = style::class(&format!("{:<24}", obj.class));
-                let name = style::name(obj.name.as_deref().unwrap_or_default());
-                writeln!(out, "{id}  {class}  {name}")?;
-            } else {
+            if !with_label {
                 writeln!(out, "{id}  {}", style::class(&obj.class))?;
+                continue;
             }
+            let class = style::class(&format!("{:<24}", obj.class));
+            // A MonoBehaviour's script as `(Script)`, then any `m_Name`.
+            let mut label = String::new();
+            if let Some(script) = &obj.script {
+                label.push_str(&style::class(&format!("({script})")));
+            }
+            if let Some(name) = obj.name.as_deref().filter(|n| !n.is_empty()) {
+                if !label.is_empty() {
+                    label.push(' ');
+                }
+                label.push_str(&style::name(name));
+            }
+            writeln!(out, "{id}  {class}  {label}")?;
         }
         Ok(())
     }
@@ -222,9 +238,16 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
                 .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
                 .unwrap_or_default()
         });
+        // For a MonoBehaviour, resolve its script class name; `component_label`
+        // returns the class id string when the script can't be resolved.
+        let script = (names && class_id == ClassId::MonoBehaviour)
+            .then(|| component_label(file, PPtr::local(path_id)).ok())
+            .flatten()
+            .filter(|label| *label != class);
         objects.push(ObjectEntry {
             path_id,
             class,
+            script,
             name,
         });
     }
