@@ -160,6 +160,22 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     })
 }
 
+/// Object class names of the selected file (for `objects --type`): the distinct
+/// `ClassId` names across all objects.
+pub fn object_types() -> Result<Vec<CompletionCandidate>> {
+    with_target_handle(|handle| {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for obj in handle.objects::<()>() {
+            let class = format!("{:?}", obj.class_id());
+            if seen.insert(class.clone()) {
+                out.push(CompletionCandidate::new(class));
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// Component/script type names of the selected file (for `find <TYPE>`): the
 /// distinct `@component` labels across the hierarchy.
 pub fn component_types() -> Result<Vec<CompletionCandidate>> {

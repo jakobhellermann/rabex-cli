@@ -305,7 +305,7 @@ pub struct TreeArgs {
 #[derive(Args)]
 pub struct ObjectsArgs {
     /// Only list objects of this class (e.g. `MonoBehaviour`, `Texture2D`).
-    #[arg(long)]
+    #[arg(long, add = ArgValueCandidates::new(|| crate::complete::object_types().unwrap_or_default()))]
     pub r#type: Option<String>,
 }
 
