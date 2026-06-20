@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::cli::{BundleArgs, BundleVerb, Context, Format};
 use crate::commands::file::{self, FileLocation};
 use crate::ctx;
-use crate::output::{Render, emit};
+use crate::output::{Render, emit, style};
 
 pub fn run(game: &Context, args: BundleArgs, format: Format) -> Result<()> {
     let (env, bundle) = ctx::open_bundle(game, &args.path)?;
@@ -96,12 +96,18 @@ pub struct BundleInfo {
 
 impl Render for BundleInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "bundle ({} files)", self.files.len())?;
+        writeln!(
+            out,
+            "{}",
+            style::header(&format!("bundle ({} files)", self.files.len()))
+        )?;
         for entry in &self.files {
             writeln!(
                 out,
-                "  {:>10}  {:<11}  {}",
-                entry.size, entry.kind, entry.path
+                "  {}  {}  {}",
+                style::dim(&format!("{:>10}", entry.size)),
+                style::class(&format!("{:<11}", entry.kind)),
+                entry.path
             )?;
         }
         Ok(())

@@ -25,6 +25,16 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
     let game = &cli.game;
     let format = cli.output.format;
 
+    use std::io::IsTerminal as _;
+    let color = match cli.output.color {
+        crate::cli::ColorChoice::Always => true,
+        crate::cli::ColorChoice::Never => false,
+        crate::cli::ColorChoice::Auto => {
+            std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+        }
+    };
+    crate::output::set_color(color);
+
     match cli.command {
         // Game summary.
         Command::Game(args) => match args.verb.unwrap_or(GameVerb::Info) {

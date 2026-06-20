@@ -30,6 +30,21 @@ pub struct OutputOpts {
     /// Output format: human-readable text or structured JSON for tooling.
     #[arg(long, global = true, value_enum, default_value_t = Format::Pretty)]
     pub format: Format,
+
+    /// When to colorize `pretty` output.
+    #[arg(long, global = true, value_enum, default_value_t = ColorChoice::Auto)]
+    pub color: ColorChoice,
+}
+
+/// When to emit ANSI colors in `pretty` output.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoice {
+    /// Colorize when stdout is a terminal and `NO_COLOR` is unset (the default).
+    Auto,
+    /// Always colorize.
+    Always,
+    /// Never colorize.
+    Never,
 }
 
 /// The game context, shared by every command (optional for standalone paths,

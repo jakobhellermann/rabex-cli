@@ -19,7 +19,7 @@ use rabex_env::unity::types::AssetBundle;
 
 use crate::cli::{FileVerb, Format, InfoArgs, ObjectVerb};
 use crate::component_path::{ComponentPath, Field, ObjectRef};
-use crate::output::{Render, emit};
+use crate::output::{Render, emit, style};
 
 pub enum FileLocation {
     File(String),
@@ -110,7 +110,7 @@ pub struct FileInfo {
 
 impl Render for FileInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "serialized file")?;
+        writeln!(out, "{}", style::header("serialized file"))?;
         writeln!(
             out,
             "  unity version: {}",
@@ -182,16 +182,13 @@ impl Render for ObjectList {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         let with_names = self.0.iter().any(|o| o.name.is_some());
         for obj in &self.0 {
+            let id = style::dim(&format!("{:>12}", obj.path_id));
             if with_names {
-                writeln!(
-                    out,
-                    "{:>12}  {:<24}  {}",
-                    obj.path_id,
-                    obj.class,
-                    obj.name.as_deref().unwrap_or_default()
-                )?;
+                let class = style::class(&format!("{:<24}", obj.class));
+                let name = style::name(obj.name.as_deref().unwrap_or_default());
+                writeln!(out, "{id}  {class}  {name}")?;
             } else {
-                writeln!(out, "{:>12}  {}", obj.path_id, obj.class)?;
+                writeln!(out, "{id}  {}", style::class(&obj.class))?;
             }
         }
         Ok(())
@@ -283,19 +280,25 @@ impl Render for Preloads {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         writeln!(
             out,
-            "preload table: {} entries, container: {} entries, {} dependency bundle(s)",
-            self.preload_table_len,
-            self.container_len,
-            self.dependencies.len()
+            "{}",
+            style::header(&format!(
+                "preload table: {} entries, container: {} entries, {} dependency bundle(s)",
+                self.preload_table_len,
+                self.container_len,
+                self.dependencies.len()
+            ))
         )?;
         for entry in &self.entries {
             writeln!(
                 out,
-                "\n■ {}  [{}..{}] ({} object(s))",
-                entry.address,
-                entry.preload_index,
-                entry.preload_index + entry.preload_size,
-                entry.preload_size
+                "\n■ {}  {}",
+                style::name(&entry.address),
+                style::dim(&format!(
+                    "[{}..{}] ({} object(s))",
+                    entry.preload_index,
+                    entry.preload_index + entry.preload_size,
+                    entry.preload_size
+                ))
             )?;
             writeln!(out, "  asset: {}", render_ref(&entry.asset))?;
             for r in &entry.slice {
@@ -307,11 +310,15 @@ impl Render for Preloads {
 }
 
 fn render_ref(r: &PreloadRef) -> String {
-    let class = r.class.as_deref().unwrap_or("?");
-    match (&r.bundle, r.local) {
-        (Some(bundle), _) => format!("EXT    {class:<22} #{}  @ {bundle}", r.path_id),
-        (None, true) => format!("local  {class:<22} #{}", r.path_id),
-        (None, false) => format!("EXT    {class:<22} #{}", r.path_id),
+    let prefix = style::dim(if r.local { "local  " } else { "EXT    " });
+    let class = style::class(&format!("{:<22}", r.class.as_deref().unwrap_or("?")));
+    let id = style::dim(&format!("#{}", r.path_id));
+    match &r.bundle {
+        Some(bundle) => format!(
+            "{prefix}{class} {id}  {}",
+            style::dim(&format!("@ {bundle}"))
+        ),
+        None => format!("{prefix}{class} {id}"),
     }
 }
 
@@ -430,13 +437,13 @@ impl TreeNode {
     fn render(&self, depth: usize, out: &mut dyn Write) -> Result<()> {
         writeln!(
             out,
-            "{}{}  #{}",
+            "{}{}  {}",
             "  ".repeat(depth),
-            quote_if_spaced(&self.name),
-            self.path_id
+            style::name(&quote_if_spaced(&self.name)),
+            style::dim(&format!("#{}", self.path_id))
         )?;
         for label in &self.components {
-            writeln!(out, "{}- {}", "  ".repeat(depth + 1), label)?;
+            writeln!(out, "{}- {}", "  ".repeat(depth + 1), style::class(label))?;
         }
         for child in &self.children {
             child.render(depth + 1, out)?;
@@ -467,8 +474,11 @@ impl Render for Tree {
             };
             writeln!(
                 out,
-                "{} {noun} outside the hierarchy",
-                self.outside_hierarchy
+                "{}",
+                style::dim(&format!(
+                    "{} {noun} outside the hierarchy",
+                    self.outside_hierarchy
+                ))
             )?;
         }
         Ok(())
@@ -605,11 +615,11 @@ pub struct ComponentMatches(pub Vec<ComponentMatch>);
 impl Render for ComponentMatches {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         for m in &self.0 {
-            writeln!(
-                out,
-                "{}  (GameObject #{}, component #{})",
-                m.path, m.gameobject_path_id, m.component_path_id
-            )?;
+            let ids = style::dim(&format!(
+                "(GameObject #{}, component #{})",
+                m.gameobject_path_id, m.component_path_id
+            ));
+            writeln!(out, "{}  {ids}", m.path)?;
         }
         Ok(())
     }
@@ -824,13 +834,18 @@ pub struct ObjectInfo {
 
 impl Render for ObjectInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "  {:<9}{}", "path id:", self.path_id)?;
-        writeln!(out, "  {:<9}{}", "class:", self.class)?;
+        writeln!(
+            out,
+            "  {:<9}{}",
+            "path id:",
+            style::dim(&self.path_id.to_string())
+        )?;
+        writeln!(out, "  {:<9}{}", "class:", style::class(&self.class))?;
         if let Some(script) = &self.script {
-            writeln!(out, "  {:<9}{script}", "script:")?;
+            writeln!(out, "  {:<9}{}", "script:", style::class(script))?;
         }
         if let Some(name) = &self.name {
-            writeln!(out, "  {:<9}{name}", "name:")?;
+            writeln!(out, "  {:<9}{}", "name:", style::name(name))?;
         }
         Ok(())
     }
@@ -977,9 +992,12 @@ impl Render for ObjectReferences {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         writeln!(
             out,
-            "{} reference(s) to {}:",
-            self.referrers.len(),
-            self.target
+            "{}",
+            style::header(&format!(
+                "{} reference(s) to {}:",
+                self.referrers.len(),
+                self.target
+            ))
         )?;
         // Pad the file and path-id columns to the width they need so the labels
         // line up; the label itself is the last column and needs no padding.
@@ -996,18 +1014,12 @@ impl Render for ObjectReferences {
             .max()
             .unwrap_or(0);
         for referrer in &self.referrers {
+            let file = style::name(&format!("{:<file_width$}", referrer.file));
+            let id = style::dim(&format!("{:>id_width$}", referrer.path_id));
             if referrer.label.is_empty() {
-                writeln!(
-                    out,
-                    "- {:<file_width$}  {:>id_width$}",
-                    referrer.file, referrer.path_id
-                )?;
+                writeln!(out, "- {file}  {id}")?;
             } else {
-                writeln!(
-                    out,
-                    "- {:<file_width$}  {:>id_width$}  {}",
-                    referrer.file, referrer.path_id, referrer.label
-                )?;
+                writeln!(out, "- {file}  {id}  {}", style::class(&referrer.label))?;
             }
         }
         Ok(())

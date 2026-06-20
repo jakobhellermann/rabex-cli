@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::cli::Format;
 use crate::ctx;
-use crate::output::{Render, emit};
+use crate::output::{Render, emit, style};
 
 /// Summary of a unity game directory.
 #[derive(Serialize)]
@@ -29,7 +29,7 @@ pub struct GameInfo {
 
 impl Render for GameInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "game directory")?;
+        writeln!(out, "{}", style::header("game directory"))?;
         writeln!(out, "  unity version: {}", self.unity_version)?;
         writeln!(out, "  serialized files: {}", self.serialized_files)?;
         let addressables = if self.addressables { "yes" } else { "no" };
@@ -104,9 +104,9 @@ pub struct ScriptLocations(pub Vec<ScriptLocation>);
 impl Render for ScriptLocations {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         for entry in &self.0 {
-            writeln!(out, "{}", entry.script)?;
+            writeln!(out, "{}", style::class(&entry.script))?;
             for location in &entry.locations {
-                writeln!(out, "  {location}")?;
+                writeln!(out, "  {}", style::dim(location))?;
             }
         }
         Ok(())
@@ -188,7 +188,7 @@ pub struct AddressableStats {
 
 impl Render for AddressableStats {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "addressables")?;
+        writeln!(out, "{}", style::header("addressables"))?;
         writeln!(out, "  catalogs:  {}", self.catalogs)?;
         writeln!(out, "  keys:      {}", self.keys)?;
         writeln!(
@@ -258,7 +258,12 @@ fn render_breakdown(out: &mut dyn Write, heading: &str, entries: &[(String, usiz
     writeln!(out)?;
     writeln!(out, "  {heading}:")?;
     for (name, count) in entries {
-        writeln!(out, "    {count:>6}  {name}")?;
+        writeln!(
+            out,
+            "    {}  {}",
+            style::dim(&format!("{count:>6}")),
+            style::class(name)
+        )?;
     }
     Ok(())
 }
@@ -278,7 +283,12 @@ pub struct AddressableKeys(pub Vec<AddressableKey>);
 impl Render for AddressableKeys {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         for entry in &self.0 {
-            writeln!(out, "{}  ({})", entry.key, entry.types.join(", "))?;
+            writeln!(
+                out,
+                "{}  {}",
+                style::name(&entry.key),
+                style::class(&format!("({})", entry.types.join(", ")))
+            )?;
         }
         Ok(())
     }
@@ -333,15 +343,20 @@ impl Render for AddressableInfo {
         } else {
             "locations"
         };
-        writeln!(out, "{} ({} {noun})", self.key, self.locations.len())?;
+        writeln!(
+            out,
+            "{} {}",
+            style::name(&self.key),
+            style::dim(&format!("({} {noun})", self.locations.len()))
+        )?;
         for (i, loc) in self.locations.iter().enumerate() {
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "  {:<14}{}", "type:", loc.type_)?;
+            writeln!(out, "  {:<14}{}", "type:", style::class(&loc.type_))?;
             writeln!(out, "  {:<14}{}", "primary key:", loc.primary_key)?;
             writeln!(out, "  {:<14}{}", "internal id:", loc.internal_id)?;
-            writeln!(out, "  {:<14}{}", "provider:", loc.provider)?;
+            writeln!(out, "  {:<14}{}", "provider:", style::class(&loc.provider))?;
             if let Some(bundle) = &loc.bundle {
                 writeln!(out, "  {:<14}{}", "bundle:", bundle.display())?;
             }
@@ -351,7 +366,7 @@ impl Render for AddressableInfo {
             if loc.dependencies > 0 {
                 writeln!(out, "  {:<14}{}", "dependencies:", loc.dependencies)?;
                 for label in &loc.dependency_labels {
-                    writeln!(out, "    {label}")?;
+                    writeln!(out, "    {}", style::dim(label))?;
                 }
             }
         }
@@ -450,7 +465,12 @@ impl Render for Scenes {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         let width = self.0.iter().map(|s| s.name.len()).max().unwrap_or(0);
         for scene in &self.0 {
-            writeln!(out, "{:<width$}  {}", scene.name, scene.source)?;
+            writeln!(
+                out,
+                "{}  {}",
+                style::name(&format!("{:<width$}", scene.name)),
+                style::dim(&scene.source)
+            )?;
         }
         Ok(())
     }
