@@ -352,6 +352,10 @@ pub struct ReferencesArgs {
     /// Repeatable; takes precedence over `--include`.
     #[arg(long, value_name = "SUBSTR", add = ArgValueCandidates::new(|| crate::complete::referrer_files().unwrap_or_default()))]
     pub exclude: Vec<String>,
+    /// Show at most this many referrers (the first N after sorting). The header
+    /// still reports the full total.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
 }
 
 use crate::component_path::ComponentPath;

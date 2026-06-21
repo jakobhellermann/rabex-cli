@@ -234,7 +234,7 @@ fn file_object_references_resolves_names() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("1 reference(s) to Player:"))
+        .stdout(predicates::str::contains("1 reference to Player:"))
         .stdout(predicates::str::contains("Player@Transform"));
 }
 
@@ -258,10 +258,57 @@ fn file_object_references_files_with_matches() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("1 file(s) referencing Player:"))
+        .stdout(predicates::str::contains("1 file referencing Player:"))
         .stdout(predicates::str::contains("- level0"))
         // The file list omits per-object labels.
         .stdout(predicates::str::contains("Player@Transform").count(0));
+}
+
+/// `object <id> references --limit` stops the scan early and flags the listing
+/// as truncated; a limit above the total leaves the plain header unchanged.
+#[test]
+fn file_object_references_limit() {
+    let (_tmp, path, go_ids) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+    let id = go_ids[0].to_string();
+
+    // --limit 0 shows nothing and flags the cut-off (the true total is unknown).
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &id,
+            "references",
+            "--limit",
+            "0",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "first 0 references to Player (--limit):",
+        ))
+        .stdout(predicates::str::contains("Player@Transform").count(0));
+
+    // A limit above the total is never reached, so the plain header stays.
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &id,
+            "references",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("1 reference to Player:"))
+        .stdout(predicates::str::contains("Player@Transform"));
 }
 
 /// `object <id> references --exclude/--include` filter referrers by a
@@ -287,7 +334,7 @@ fn file_object_references_include_exclude() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("0 reference(s) to Player:"));
+        .stdout(predicates::str::contains("0 references to Player:"));
 
     // --include with a non-matching substring drops it too.
     rabex()
@@ -304,7 +351,7 @@ fn file_object_references_include_exclude() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("0 reference(s) to Player:"));
+        .stdout(predicates::str::contains("0 references to Player:"));
 
     // --include matching the path keeps it.
     rabex()
@@ -321,7 +368,7 @@ fn file_object_references_include_exclude() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("1 reference(s) to Player:"));
+        .stdout(predicates::str::contains("1 reference to Player:"));
 }
 
 /// `object <id> references` hides preload-table referrers (`PreloadData` /
@@ -341,7 +388,7 @@ fn file_object_references_filters_preloads() {
         .args(["file", "level0", "object", &go_id.to_string(), "references"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("1 reference(s) to Player:"))
+        .stdout(predicates::str::contains("1 reference to Player:"))
         .stdout(predicates::str::contains("Player@Transform"))
         .stdout(predicates::str::contains("PreloadData").count(0));
 
@@ -359,7 +406,7 @@ fn file_object_references_filters_preloads() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("2 reference(s) to Player:"))
+        .stdout(predicates::str::contains("2 references to Player:"))
         .stdout(predicates::str::contains("PreloadData"));
 }
 

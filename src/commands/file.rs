@@ -70,6 +70,7 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                         args.include_preloads,
                         &args.include,
                         &args.exclude,
+                        args.limit,
                     )?,
                     format,
                     &mut out,
@@ -82,6 +83,7 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                         args.include_preloads,
                         &args.include,
                         &args.exclude,
+                        args.limit,
                     )?,
                     format,
                     &mut out,
@@ -1037,12 +1039,34 @@ pub struct Referrer {
     label: String,
 }
 
+/// Header line for a references listing, with the count-appropriate `noun`. When
+/// the scan stopped early at `--limit` the true total is unknown, so it flags
+/// that; otherwise it is the plain `"{shown} {noun} {target}:"` form (`shown` is
+/// then the full total).
+fn references_header(
+    singular: &str,
+    plural: &str,
+    target: &str,
+    shown: usize,
+    truncated: bool,
+) -> String {
+    let noun = if shown == 1 { singular } else { plural };
+    if truncated {
+        format!("first {shown} {noun} {target} (--limit):")
+    } else {
+        format!("{shown} {noun} {target}:")
+    }
+}
+
 /// Every object that references a target object (local or from another file).
 #[derive(Serialize)]
 pub struct ObjectReferences {
     /// The target object's `m_Name` (e.g. a `MonoScript`'s class name), else `#<path id>`.
     target: String,
     path_id: PathId,
+    /// Whether the scan stopped early at `--limit` (so more referrers may exist).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
     referrers: Vec<Referrer>,
 }
 
@@ -1051,10 +1075,12 @@ impl Render for ObjectReferences {
         writeln!(
             out,
             "{}",
-            style::header(&format!(
-                "{} reference(s) to {}:",
+            style::header(&references_header(
+                "reference to",
+                "references to",
+                &self.target,
                 self.referrers.len(),
-                self.target
+                self.truncated,
             ))
         )?;
         // Pad the file and path-id columns to the width they need so the labels
@@ -1092,18 +1118,25 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     include_preloads: bool,
     include: &[String],
     exclude: &[String],
+    limit: Option<usize>,
 ) -> Result<ObjectReferences> {
     let target_file = file_location.external_name();
     let filter = find_references::PathFilter::new(include, exclude);
-    let mut referrers = find_references::referencing_objects(
+    let (mut referrers, truncated) = find_references::referencing_objects(
         handle.env,
         &target_file,
         path_id,
         include_preloads,
         false,
         &filter,
+        limit,
     )?;
     referrers.sort();
+    // The early-exit scan collects from candidates sorted before the cut-off; after sorting,
+    // trimming to `limit` yields exactly the globally-first `limit` referrers.
+    if let Some(limit) = limit {
+        referrers.truncate(limit);
+    }
 
     // Resolve the target's own name for the header (e.g. the MonoScript's class name).
     let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
@@ -1111,6 +1144,7 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     Ok(ObjectReferences {
         target,
         path_id,
+        truncated,
         referrers: referrers
             .into_iter()
             .map(|(file, path_id, label)| Referrer {
@@ -1128,6 +1162,9 @@ pub struct ReferencingFiles {
     /// The target object's `m_Name` (e.g. a `MonoScript`'s class name), else `#<path id>`.
     target: String,
     path_id: PathId,
+    /// Whether the scan stopped early at `--limit` (so more files may exist).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
     files: Vec<String>,
 }
 
@@ -1136,10 +1173,12 @@ impl Render for ReferencingFiles {
         writeln!(
             out,
             "{}",
-            style::header(&format!(
-                "{} file(s) referencing {}:",
+            style::header(&references_header(
+                "file referencing",
+                "files referencing",
+                &self.target,
                 self.files.len(),
-                self.target
+                self.truncated,
             ))
         )?;
         for file in &self.files {
@@ -1158,28 +1197,34 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
     include_preloads: bool,
     include: &[String],
     exclude: &[String],
+    limit: Option<usize>,
 ) -> Result<ReferencingFiles> {
     let target_file = file_location.external_name();
     let filter = find_references::PathFilter::new(include, exclude);
-    let referrers = find_references::referencing_objects(
+    let (referrers, truncated) = find_references::referencing_objects(
         handle.env,
         &target_file,
         path_id,
         include_preloads,
         true,
         &filter,
+        limit,
     )?;
 
     // Collapse the (at most one per file) hits into a sorted, distinct file list.
     let mut files: Vec<String> = referrers.into_iter().map(|(file, _, _)| file).collect();
     files.sort();
     files.dedup();
+    if let Some(limit) = limit {
+        files.truncate(limit);
+    }
 
     let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
 
     Ok(ReferencingFiles {
         target,
         path_id,
+        truncated,
         files,
     })
 }
@@ -1198,6 +1243,9 @@ mod find_references {
     use rabex_env::handle::SerializedFileHandle;
     use rabex_env::resolver::EnvResolver;
     use rayon::iter::ParallelBridge as _;
+
+    /// A collected referrer: `(readable location, path id, object label)`.
+    type Referrers = Vec<(String, PathId, String)>;
 
     /// Case-insensitive substring allow/deny list over referrer file paths.
     /// Lets the scan skip whole files before reading them.
@@ -1266,29 +1314,63 @@ mod find_references {
         Ok(referrers)
     }
 
-    /// Every object that references `(target_file, target_path_id)`, as
-    /// `(readable location, path id, object label)`.
-    ///
-    /// Only files that list `target_file` in their externals (plus `target_file` itself, for local
-    /// references) can reference the object, so the rest are skipped without scanning their objects.
-    pub fn referencing_objects<R: EnvResolver, P: TypeTreeProvider + Sync>(
+    /// A file that might reference the target: an addressables bundle or a plain
+    /// serialized file. Reported by its readable `display` path.
+    enum Candidate {
+        Bundle(PathBuf),
+        Plain(PathBuf),
+    }
+
+    impl Candidate {
+        /// The readable path a referrer in this file is reported under — also the
+        /// primary sort key, so it matches the final referrer ordering.
+        fn display(&self) -> String {
+            match self {
+                Candidate::Bundle(p) | Candidate::Plain(p) => p.display().to_string(),
+            }
+        }
+    }
+
+    /// Every candidate file in the game: the addressables bundles plus the plain
+    /// serialized files (`levelN`, `*.assets`, `globalgamemanagers`) — scene/level
+    /// files live in the latter, so omitting them misses most referrers.
+    fn candidates<R: EnvResolver, P: TypeTreeProvider + Sync>(
         env: &Environment<R, P>,
+    ) -> Result<Vec<Candidate>> {
+        let mut out: Vec<Candidate> = env
+            .addressables_bundles()?
+            .into_iter()
+            .map(Candidate::Bundle)
+            .collect();
+        out.extend(
+            env.game_files
+                .serialized_files()?
+                .into_iter()
+                .map(Candidate::Plain),
+        );
+        Ok(out)
+    }
+
+    /// Scan one candidate file for objects referencing `(target_file, target_path_id)`,
+    /// honouring the path `filter` (skips before reading) and the externals pre-filter.
+    fn scan_candidate<R: EnvResolver, P: TypeTreeProvider>(
+        env: &Environment<R, P>,
+        candidate: &Candidate,
         target_file: &str,
         target_path_id: PathId,
         include_preloads: bool,
         first_only: bool,
         filter: &PathFilter,
-    ) -> Result<Vec<(String, PathId, String)>> {
-        let from_bundles = rabex_env::utils::par_fold_reduce(
-            env.addressables_bundles()?.into_iter().par_bridge(),
-            |acc: &mut Vec<(String, PathId, String)>, bundle_path| {
-                // Referrers are reported by their (readable) bundle path, not the archive path.
-                let display = bundle_path.display().to_string();
-                // Filtered-out bundles can't contribute a referrer — skip before loading.
-                if !filter.accepts(&display) {
-                    return Ok(());
-                }
-                let bundle = env.load_addressables_bundle(&bundle_path)?;
+        acc: &mut Referrers,
+    ) -> Result<()> {
+        let display = candidate.display();
+        // Filtered-out files can't contribute a referrer — skip before reading.
+        if !filter.accepts(&display) {
+            return Ok(());
+        }
+        match candidate {
+            Candidate::Bundle(bundle_path) => {
+                let bundle = env.load_addressables_bundle(bundle_path)?;
                 let bundle_id = bundle
                     .main_serializedfile()
                     .context("bundle has no main serialized file")?
@@ -1314,39 +1396,106 @@ mod find_references {
                     )?;
                 }
                 Ok(())
-            },
-        )?;
-
-        let from_plain = rabex_env::utils::par_fold_reduce(
-            env.game_files.serialized_files()?.into_iter().par_bridge(),
-            |acc: &mut Vec<(String, PathId, String)>, path| {
-                let name = path.display().to_string();
-                // Filtered-out files can't contribute a referrer — skip before reading.
-                if !filter.accepts(&name) {
-                    return Ok(());
-                }
-                let data = env.game_files.read_path(&path)?;
+            }
+            Candidate::Plain(path) => {
+                let data = env.game_files.read_path(path)?;
                 let file = SerializedFile::from_reader(&mut Cursor::new(data.as_ref()))?;
-                if name != target_file && !file.externals_paths().any(|e| e == target_file) {
+                if display != target_file && !file.externals_paths().any(|e| e == target_file) {
                     return Ok(());
                 }
                 let handle = SerializedFileHandle::new(env, &file, data.as_ref());
                 scan_objects(
                     &handle,
-                    &name,
-                    &name,
+                    &display,
+                    &display,
                     target_file,
                     target_path_id,
                     include_preloads,
                     first_only,
                     acc,
                 )
-            },
-        )?;
+            }
+        }
+    }
 
-        let mut referrers = from_bundles;
-        referrers.extend(from_plain);
-        Ok(referrers)
+    /// Every object that references `(target_file, target_path_id)`, as
+    /// `(readable location, path id, object label)`, plus whether the result was
+    /// cut short by `limit`.
+    ///
+    /// Only files that list `target_file` in their externals (plus `target_file` itself, for local
+    /// references) can reference the object, so the rest are skipped without scanning their objects.
+    ///
+    /// Without a `limit` every candidate is scanned in parallel. With one, candidates are scanned
+    /// **sequentially in sorted order** so the scan can stop as soon as enough referrers are found —
+    /// the early-exit means the true total is no longer known (hence the `truncated` flag).
+    pub fn referencing_objects<R: EnvResolver, P: TypeTreeProvider + Sync>(
+        env: &Environment<R, P>,
+        target_file: &str,
+        target_path_id: PathId,
+        include_preloads: bool,
+        first_only: bool,
+        filter: &PathFilter,
+        limit: Option<usize>,
+    ) -> Result<(Referrers, bool)> {
+        let Some(limit) = limit else {
+            let referrers = rabex_env::utils::par_fold_reduce(
+                candidates(env)?.into_iter().par_bridge(),
+                |acc: &mut Referrers, candidate| {
+                    scan_candidate(
+                        env,
+                        &candidate,
+                        target_file,
+                        target_path_id,
+                        include_preloads,
+                        first_only,
+                        filter,
+                        acc,
+                    )
+                },
+            )?;
+            return Ok((referrers, false));
+        };
+
+        if limit == 0 {
+            return Ok((Vec::new(), true));
+        }
+
+        // Sorted by display, the candidates' referrers come out in the final order, so the first
+        // `limit` we collect are the globally-first `limit` — let us stop once we have them.
+        let mut candidates = candidates(env)?;
+        candidates.sort_by_cached_key(Candidate::display);
+
+        let mut acc = Vec::new();
+        // In `--files-with-matches` mode each file yields at most one shown entry, so the limit
+        // counts distinct files that produced a hit rather than raw referrers.
+        let mut files_hit = 0usize;
+        let mut truncated = false;
+        for candidate in &candidates {
+            let before = acc.len();
+            scan_candidate(
+                env,
+                candidate,
+                target_file,
+                target_path_id,
+                include_preloads,
+                first_only,
+                filter,
+                &mut acc,
+            )?;
+            if acc.len() > before {
+                files_hit += 1;
+            }
+            let reached = if first_only {
+                files_hit >= limit
+            } else {
+                acc.len() >= limit
+            };
+            if reached {
+                truncated = true;
+                break;
+            }
+        }
+        Ok((acc, truncated))
     }
 
     /// Collect objects in `handle` whose reachable PPtrs point at `(target_file, target_path_id)`,
@@ -1360,7 +1509,7 @@ mod find_references {
         target_path_id: PathId,
         include_preloads: bool,
         first_only: bool,
-        acc: &mut Vec<(String, PathId, String)>,
+        acc: &mut Referrers,
     ) -> Result<()> {
         // `acc` accumulates across files in the fold; compare against its length
         // on entry to detect a hit from *this* file.
