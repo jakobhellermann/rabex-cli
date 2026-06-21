@@ -238,6 +238,32 @@ fn file_object_references_resolves_names() {
         .stdout(predicates::str::contains("Transform (on 'Player')"));
 }
 
+/// `object <id> references --files-with-matches` lists just the distinct files
+/// that contain a referrer (like `grep -l`), not each referring object.
+#[test]
+fn file_object_references_files_with_matches() {
+    let (_tmp, path, go_ids) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &go_ids[0].to_string(),
+            "references",
+            "--files-with-matches",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("1 file(s) referencing Player:"))
+        .stdout(predicates::str::contains("- level0"))
+        // The file list omits per-object labels.
+        .stdout(predicates::str::contains("Transform (on 'Player')").count(0));
+}
+
 /// `object <id> references` hides preload-table referrers (`PreloadData` /
 /// `AssetBundle`) by default; `--include-preloads` brings them back.
 #[test]

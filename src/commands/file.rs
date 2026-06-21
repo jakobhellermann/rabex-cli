@@ -62,6 +62,16 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
             match args.verb.unwrap_or(ObjectVerb::Info) {
                 ObjectVerb::Info => emit(&object_info(file, path_id)?, format, &mut out),
                 ObjectVerb::Cat => emit(&dump_path_id(file, path_id)?, format, &mut out),
+                ObjectVerb::References(args) if args.files_with_matches => emit(
+                    &object_referencing_files(
+                        &file_location,
+                        file,
+                        path_id,
+                        args.include_preloads,
+                    )?,
+                    format,
+                    &mut out,
+                ),
                 ObjectVerb::References(args) => emit(
                     &object_references(&file_location, file, path_id, args.include_preloads)?,
                     format,
@@ -1065,8 +1075,13 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     include_preloads: bool,
 ) -> Result<ObjectReferences> {
     let target_file = file_location.external_name();
-    let mut referrers =
-        find_references::referencing_objects(handle.env, &target_file, path_id, include_preloads)?;
+    let mut referrers = find_references::referencing_objects(
+        handle.env,
+        &target_file,
+        path_id,
+        include_preloads,
+        false,
+    )?;
     referrers.sort();
 
     // Resolve the target's own name for the header (e.g. the MonoScript's class name).
@@ -1083,6 +1098,64 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
                 label,
             })
             .collect(),
+    })
+}
+
+/// The distinct files that reference a target object (`references -l`).
+#[derive(Serialize)]
+pub struct ReferencingFiles {
+    /// The target object's `m_Name` (e.g. a `MonoScript`'s class name), else `#<path id>`.
+    target: String,
+    path_id: PathId,
+    files: Vec<String>,
+}
+
+impl Render for ReferencingFiles {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(
+            out,
+            "{}",
+            style::header(&format!(
+                "{} file(s) referencing {}:",
+                self.files.len(),
+                self.target
+            ))
+        )?;
+        for file in &self.files {
+            writeln!(out, "- {}", style::name(file))?;
+        }
+        Ok(())
+    }
+}
+
+/// Find the distinct files that reference the given object, stopping at the
+/// first referrer per file. See `object_references` for the full per-object list.
+pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
+    file_location: &FileLocation,
+    handle: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+    include_preloads: bool,
+) -> Result<ReferencingFiles> {
+    let target_file = file_location.external_name();
+    let referrers = find_references::referencing_objects(
+        handle.env,
+        &target_file,
+        path_id,
+        include_preloads,
+        true,
+    )?;
+
+    // Collapse the (at most one per file) hits into a sorted, distinct file list.
+    let mut files: Vec<String> = referrers.into_iter().map(|(file, _, _)| file).collect();
+    files.sort();
+    files.dedup();
+
+    let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
+
+    Ok(ReferencingFiles {
+        target,
+        path_id,
+        files,
     })
 }
 
@@ -1151,6 +1224,7 @@ mod find_references {
         target_file: &str,
         target_path_id: PathId,
         include_preloads: bool,
+        first_only: bool,
     ) -> Result<Vec<(String, PathId, String)>> {
         let from_bundles = rabex_env::utils::par_fold_reduce(
             env.addressables_bundles()?.into_iter().par_bridge(),
@@ -1178,6 +1252,7 @@ mod find_references {
                         target_file,
                         target_path_id,
                         include_preloads,
+                        first_only,
                         acc,
                     )?;
                 }
@@ -1202,6 +1277,7 @@ mod find_references {
                     target_file,
                     target_path_id,
                     include_preloads,
+                    first_only,
                     acc,
                 )
             },
@@ -1222,8 +1298,12 @@ mod find_references {
         target_file: &str,
         target_path_id: PathId,
         include_preloads: bool,
+        first_only: bool,
         acc: &mut Vec<(String, PathId, String)>,
     ) -> Result<()> {
+        // `acc` accumulates across files in the fold; compare against its length
+        // on entry to detect a hit from *this* file.
+        let before = acc.len();
         for object in handle.objects::<()>() {
             // Preload tables (an AssetBundle's m_PreloadTable / a PreloadData's m_Assets) list
             // the target as a load-time dependency, not a true user — skip them by default.
@@ -1251,6 +1331,11 @@ mod find_references {
                     acc.push((display.to_owned(), path_id, label));
                     break;
                 }
+            }
+            // For `--files-with-matches` one hit proves the file references the
+            // target; skip its remaining objects.
+            if first_only && acc.len() > before {
+                break;
             }
         }
         Ok(())

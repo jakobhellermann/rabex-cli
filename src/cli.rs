@@ -340,6 +340,10 @@ pub struct ReferencesArgs {
     /// objects list the target as a load-time dependency, not a true user.
     #[arg(long)]
     pub include_preloads: bool,
+    /// Only list the distinct files that contain a referrer (like `grep -l`),
+    /// not each referring object. Lets the scan stop at the first hit per file.
+    #[arg(long, short = 'l')]
+    pub files_with_matches: bool,
 }
 
 use crate::component_path::ComponentPath;
