@@ -225,6 +225,19 @@ pub fn game_files() -> Result<Vec<CompletionCandidate>> {
     Ok(paths_to_candidates(env.game_files.serialized_files()?))
 }
 
+/// Candidates for `references --include/--exclude`: the file paths that can show
+/// up as a referrer — the game's serialized files plus the addressables bundles.
+/// Cheap: just enumerates paths, no per-file parsing. The flags match any
+/// substring, so a full path is one valid choice among many.
+pub fn referrer_files() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    let mut paths = env.game_files.serialized_files()?;
+    paths.extend(env.addressables_bundles()?);
+    Ok(paths_to_candidates(paths))
+}
+
 /// Candidates for `bundle <path> file <CAB>`: the serialized files inside the
 /// bundle named on the command line.
 pub fn bundle_cabs() -> Result<Vec<CompletionCandidate>> {

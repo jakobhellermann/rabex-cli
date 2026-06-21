@@ -344,6 +344,14 @@ pub struct ReferencesArgs {
     /// not each referring object. Lets the scan stop at the first hit per file.
     #[arg(long, short = 'l')]
     pub files_with_matches: bool,
+    /// Only keep referrers whose file path contains this substring
+    /// (case-insensitive). Repeatable; a referrer matching any is kept.
+    #[arg(long, value_name = "SUBSTR", add = ArgValueCandidates::new(|| crate::complete::referrer_files().unwrap_or_default()))]
+    pub include: Vec<String>,
+    /// Skip referrers whose file path contains this substring (case-insensitive).
+    /// Repeatable; takes precedence over `--include`.
+    #[arg(long, value_name = "SUBSTR", add = ArgValueCandidates::new(|| crate::complete::referrer_files().unwrap_or_default()))]
+    pub exclude: Vec<String>,
 }
 
 use crate::component_path::ComponentPath;

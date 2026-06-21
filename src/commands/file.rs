@@ -68,12 +68,21 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                         file,
                         path_id,
                         args.include_preloads,
+                        &args.include,
+                        &args.exclude,
                     )?,
                     format,
                     &mut out,
                 ),
                 ObjectVerb::References(args) => emit(
-                    &object_references(&file_location, file, path_id, args.include_preloads)?,
+                    &object_references(
+                        &file_location,
+                        file,
+                        path_id,
+                        args.include_preloads,
+                        &args.include,
+                        &args.exclude,
+                    )?,
                     format,
                     &mut out,
                 ),
@@ -1073,14 +1082,18 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     handle: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
     include_preloads: bool,
+    include: &[String],
+    exclude: &[String],
 ) -> Result<ObjectReferences> {
     let target_file = file_location.external_name();
+    let filter = find_references::PathFilter::new(include, exclude);
     let mut referrers = find_references::referencing_objects(
         handle.env,
         &target_file,
         path_id,
         include_preloads,
         false,
+        &filter,
     )?;
     referrers.sort();
 
@@ -1135,14 +1148,18 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
     handle: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
     include_preloads: bool,
+    include: &[String],
+    exclude: &[String],
 ) -> Result<ReferencingFiles> {
     let target_file = file_location.external_name();
+    let filter = find_references::PathFilter::new(include, exclude);
     let referrers = find_references::referencing_objects(
         handle.env,
         &target_file,
         path_id,
         include_preloads,
         true,
+        &filter,
     )?;
 
     // Collapse the (at most one per file) hits into a sorted, distinct file list.
@@ -1173,6 +1190,33 @@ mod find_references {
     use rabex_env::handle::SerializedFileHandle;
     use rabex_env::resolver::EnvResolver;
     use rayon::iter::ParallelBridge as _;
+
+    /// Case-insensitive substring allow/deny list over referrer file paths.
+    /// Lets the scan skip whole files before reading them.
+    pub struct PathFilter {
+        include: Vec<String>,
+        exclude: Vec<String>,
+    }
+
+    impl PathFilter {
+        pub fn new(include: &[String], exclude: &[String]) -> Self {
+            let lower = |v: &[String]| v.iter().map(|s| s.to_lowercase()).collect();
+            PathFilter {
+                include: lower(include),
+                exclude: lower(exclude),
+            }
+        }
+
+        /// Whether a referrer reported under `path` should be kept: it must match
+        /// some `include` (when any are set) and none of the `exclude`.
+        fn accepts(&self, path: &str) -> bool {
+            let path = path.to_lowercase();
+            if !self.include.is_empty() && !self.include.iter().any(|i| path.contains(i)) {
+                return false;
+            }
+            !self.exclude.iter().any(|e| path.contains(e))
+        }
+    }
 
     /// Every file whose externals list `to`. Scans both the addressables
     /// bundles and the plain serialized files in the game data directory
@@ -1225,18 +1269,23 @@ mod find_references {
         target_path_id: PathId,
         include_preloads: bool,
         first_only: bool,
+        filter: &PathFilter,
     ) -> Result<Vec<(String, PathId, String)>> {
         let from_bundles = rabex_env::utils::par_fold_reduce(
             env.addressables_bundles()?.into_iter().par_bridge(),
             |acc: &mut Vec<(String, PathId, String)>, bundle_path| {
+                // Referrers are reported by their (readable) bundle path, not the archive path.
+                let display = bundle_path.display().to_string();
+                // Filtered-out bundles can't contribute a referrer — skip before loading.
+                if !filter.accepts(&display) {
+                    return Ok(());
+                }
                 let bundle = env.load_addressables_bundle(&bundle_path)?;
                 let bundle_id = bundle
                     .main_serializedfile()
                     .context("bundle has no main serialized file")?
                     .path
                     .clone();
-                // Referrers are reported by their (readable) bundle path, not the archive path.
-                let display = bundle_path.display().to_string();
                 for entry in bundle.serialized_files() {
                     let name = ArchivePath::new(&bundle_id, &entry.path).to_string();
                     let data = bundle.read_at_entry(entry)?;
@@ -1263,9 +1312,13 @@ mod find_references {
         let from_plain = rabex_env::utils::par_fold_reduce(
             env.game_files.serialized_files()?.into_iter().par_bridge(),
             |acc: &mut Vec<(String, PathId, String)>, path| {
+                let name = path.display().to_string();
+                // Filtered-out files can't contribute a referrer — skip before reading.
+                if !filter.accepts(&name) {
+                    return Ok(());
+                }
                 let data = env.game_files.read_path(&path)?;
                 let file = SerializedFile::from_reader(&mut Cursor::new(data.as_ref()))?;
-                let name = path.display().to_string();
                 if name != target_file && !file.externals_paths().any(|e| e == target_file) {
                     return Ok(());
                 }

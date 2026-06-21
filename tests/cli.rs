@@ -264,6 +264,66 @@ fn file_object_references_files_with_matches() {
         .stdout(predicates::str::contains("Transform (on 'Player')").count(0));
 }
 
+/// `object <id> references --exclude/--include` filter referrers by a
+/// case-insensitive substring of their file path.
+#[test]
+fn file_object_references_include_exclude() {
+    let (_tmp, path, go_ids) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+    let id = go_ids[0].to_string();
+
+    // --exclude drops the only referrer (it lives in `level0`).
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &id,
+            "references",
+            "--exclude",
+            "LEVEL",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("0 reference(s) to Player:"));
+
+    // --include with a non-matching substring drops it too.
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &id,
+            "references",
+            "--include",
+            "scenes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("0 reference(s) to Player:"));
+
+    // --include matching the path keeps it.
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .args([
+            "file",
+            "level0",
+            "object",
+            &id,
+            "references",
+            "--include",
+            "level",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("1 reference(s) to Player:"));
+}
+
 /// `object <id> references` hides preload-table referrers (`PreloadData` /
 /// `AssetBundle`) by default; `--include-preloads` brings them back.
 #[test]
