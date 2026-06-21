@@ -215,8 +215,8 @@ fn file_object_cat_by_component_path() {
 }
 
 /// `object <id> references` names the target by `m_Name` and labels each
-/// referrer with its class and the GameObject it sits on (here the GameObject's
-/// own Transform points back at it).
+/// referrer with its hierarchy component path (here the GameObject's own
+/// Transform points back at it, so `Player@Transform`).
 #[test]
 fn file_object_references_resolves_names() {
     let (_tmp, path, go_ids) = game_with_file("level0", &["Player"]);
@@ -235,7 +235,7 @@ fn file_object_references_resolves_names() {
         .assert()
         .success()
         .stdout(predicates::str::contains("1 reference(s) to Player:"))
-        .stdout(predicates::str::contains("Transform (on 'Player')"));
+        .stdout(predicates::str::contains("Player@Transform"));
 }
 
 /// `object <id> references --files-with-matches` lists just the distinct files
@@ -261,7 +261,7 @@ fn file_object_references_files_with_matches() {
         .stdout(predicates::str::contains("1 file(s) referencing Player:"))
         .stdout(predicates::str::contains("- level0"))
         // The file list omits per-object labels.
-        .stdout(predicates::str::contains("Transform (on 'Player')").count(0));
+        .stdout(predicates::str::contains("Player@Transform").count(0));
 }
 
 /// `object <id> references --exclude/--include` filter referrers by a
@@ -342,7 +342,7 @@ fn file_object_references_filters_preloads() {
         .assert()
         .success()
         .stdout(predicates::str::contains("1 reference(s) to Player:"))
-        .stdout(predicates::str::contains("Transform (on 'Player')"))
+        .stdout(predicates::str::contains("Player@Transform"))
         .stdout(predicates::str::contains("PreloadData").count(0));
 
     // With --include-preloads: the PreloadData referrer is listed too.

@@ -751,14 +751,22 @@ fn object_name<R: EnvResolver, P: TypeTreeProvider>(
         .filter(|name| !name.is_empty())
 }
 
-/// A human-readable label for an object that references something: its class
-/// (script class name for a MonoBehaviour) plus, when present, the GameObject it
-/// sits on (`X (on 'GO')`) or its own `m_Name` (`X 'name'`). Best-effort: falls
-/// back to the bare class, or an empty string when nothing can be read.
+/// A label for an object that references something. Prefers its hierarchy
+/// [`ComponentPath`] (`Root/Child@PlayMakerFSM`, re-usable with `object <ref>`).
+/// Loose assets (not on a GameObject) have no such path, so they fall back to
+/// the class (script class name for a MonoBehaviour) plus, when present, the
+/// GameObject it sits on (`X (on 'GO')`) or its own `m_Name` (`X 'name'`).
+/// Best-effort: falls back to the bare class, or an empty string when nothing
+/// can be read.
 fn referrer_label<R: EnvResolver, P: TypeTreeProvider>(
+    paths: &mut crate::qualify::PathResolver<'_, R, P>,
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
 ) -> String {
+    if let Some(path) = paths.of(path_id) {
+        return path.to_string();
+    }
+
     let head = match component_class_and_label(file, PPtr::local(path_id)) {
         Ok((_, label)) => label,
         // The script (and thus its label) may be unresolvable; show the raw class.
@@ -1357,6 +1365,10 @@ mod find_references {
         // `acc` accumulates across files in the fold; compare against its length
         // on entry to detect a hit from *this* file.
         let before = acc.len();
+        // Resolving each referrer's component path needs the file's root scan;
+        // build it once, lazily, and never for `--files-with-matches` (which
+        // discards labels anyway).
+        let mut paths = None;
         for object in handle.objects::<()>() {
             // Preload tables (an AssetBundle's m_PreloadTable / a PreloadData's m_Assets) list
             // the target as a load-time dependency, not a true user — skip them by default.
@@ -1380,7 +1392,13 @@ mod find_references {
                 };
                 if referenced == target_file && pptr.m_PathID == target_path_id {
                     let path_id = object.path_id();
-                    let label = super::referrer_label(handle, path_id);
+                    let label = if first_only {
+                        String::new()
+                    } else {
+                        let paths =
+                            paths.get_or_insert_with(|| crate::qualify::PathResolver::new(handle));
+                        super::referrer_label(paths, handle, path_id)
+                    };
                     acc.push((display.to_owned(), path_id, label));
                     break;
                 }

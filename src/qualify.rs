@@ -36,6 +36,26 @@ pub fn qualify<'a, R: EnvResolver, P: TypeTreeProvider>(
     walk(&mut cx, value);
 }
 
+/// Resolves objects in one file to their hierarchy [`ComponentPath`]
+/// (`Root/Child@Component`), reusing the file's root scan across lookups.
+pub struct PathResolver<'a, R, P> {
+    cx: FileCtx<'a, R, P>,
+}
+
+impl<'a, R: EnvResolver, P: TypeTreeProvider> PathResolver<'a, R, P> {
+    pub fn new(file: &SerializedFileHandle<'a, R, P>) -> Self {
+        PathResolver {
+            cx: FileCtx::new(file.reborrow()),
+        }
+    }
+
+    /// The component path addressing `target`, or `None` if it is not a
+    /// GameObject or a component on one (e.g. a loose asset). Best-effort.
+    pub fn of(&self, target: PathId) -> Option<ComponentPath> {
+        build_path(&self.cx, target).unwrap_or(None)
+    }
+}
+
 /// The qualification state for one serialized file: its roots and a `$ref`
 /// memo. Built per target file (the local file plus each external touched).
 struct FileCtx<'a, R, P> {
