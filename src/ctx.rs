@@ -16,9 +16,10 @@ use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
 use rabex_env::rabex::files::serializedfile::SerializedFile;
 use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
+use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::game_files::LevelFiles;
-use rabex_env::resolver::{EnvResolver as _, GameFiles};
+use rabex_env::resolver::{EnvResolver, GameFiles};
 use rabex_env::unity::types::AssetBundle;
 
 use crate::cli::Context;
@@ -356,7 +357,7 @@ pub fn addressable_keys(
 
 /// All scenes: built-in scenes (from `BuildSettings`, in build order) followed
 /// by addressables scenes (deduped, sorted), each tagged with its source.
-pub fn scenes(env: &Environment) -> Result<Vec<Scene>> {
+pub fn scenes<R: EnvResolver, P: TypeTreeProvider>(env: &Environment<R, P>) -> Result<Vec<Scene>> {
     let mut scenes = Vec::new();
     let mut seen = BTreeSet::new();
 

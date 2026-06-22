@@ -1032,6 +1032,10 @@ pub fn references<R: EnvResolver, P: TypeTreeProvider + Sync>(
 pub struct Referrer {
     /// Readable location: the bundle path, or the serialized file path.
     file: String,
+    /// Scene name of `file` when it is a built-in `levelN` scene (from
+    /// `BuildSettings`); shown as `Menu_Title (level1)`. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scene: Option<String>,
     path_id: PathId,
     /// Resolved object: its class / script name, plus its `m_Name` or the
     /// GameObject it sits on. Empty when the object could not be deserialized.
@@ -1083,22 +1087,47 @@ impl Render for ObjectReferences {
                 self.truncated,
             ))
         )?;
-        // Pad the file and path-id columns to the width they need so the labels
-        // line up; the label itself is the last column and needs no padding.
+        // Render a `levelN` scene as `Menu_Title (level1)`; plain files unchanged.
+        let display = |r: &Referrer| match &r.scene {
+            Some(scene) => format!("{scene} ({})", r.file),
+            None => r.file.clone(),
+        };
+        // Pad the file column so the path ids line up. Cap it so a few long
+        // addressables bundle paths don't pad every other row to their width —
+        // those few overflow ragged instead.
+        const FILE_WIDTH_CAP: usize = 40;
         let file_width = self
             .referrers
             .iter()
-            .map(|r| r.file.len())
+            .map(|r| display(r).len())
             .max()
-            .unwrap_or(0);
-        let id_width = self
-            .referrers
-            .iter()
-            .map(|r| r.path_id.to_string().len())
-            .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .min(FILE_WIDTH_CAP);
+        // Path ids are bimodal: classic serialized files (scenes, `sharedassets`,
+        // `levelN`) carry short sequential ids, addressables-bundle objects carry
+        // 18-20 digit hash ids — and the two never mix within one file. A single
+        // shared width would pad the short ids out to the hash width (a huge gap),
+        // so right-align each id within the width of *its own* size class: short
+        // ids line up with short ids, hash ids with hash ids.
+        const ID_SMALL_MAX: usize = 12;
+        let id_len = |r: &Referrer| r.path_id.to_string().len();
+        let width_where = |keep: fn(usize) -> bool| {
+            self.referrers
+                .iter()
+                .map(id_len)
+                .filter(|len| keep(*len))
+                .max()
+                .unwrap_or(0)
+        };
+        let small_width = width_where(|len| len <= ID_SMALL_MAX);
+        let hash_width = width_where(|len| len > ID_SMALL_MAX);
         for referrer in &self.referrers {
-            let file = style::name(&format!("{:<file_width$}", referrer.file));
+            let file = style::name(&format!("{:<file_width$}", display(referrer)));
+            let id_width = if id_len(referrer) <= ID_SMALL_MAX {
+                small_width
+            } else {
+                hash_width
+            };
             let id = style::dim(&format!("{:>id_width$}", referrer.path_id));
             if referrer.label.is_empty() {
                 writeln!(out, "- {file}  {id}")?;
@@ -1141,6 +1170,7 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     // Resolve the target's own name for the header (e.g. the MonoScript's class name).
     let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
 
+    let scenes = scene_name_lookup(handle.env);
     Ok(ObjectReferences {
         target,
         path_id,
@@ -1148,12 +1178,33 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
         referrers: referrers
             .into_iter()
             .map(|(file, path_id, label)| Referrer {
+                scene: scenes.get(&file).cloned(),
                 file,
                 path_id,
                 label,
             })
             .collect(),
     })
+}
+
+/// Maps each scene's serialized location to its scene name, so referrer listings
+/// can show the readable scene alongside the file: a built-in scene's `levelN`
+/// file (`level1` → `Menu_Title`) and an addressables scene's bundle path
+/// (`scenes_.../abyss_01.bundle` → `Abyss_01`, from the catalog — the bundle name
+/// itself is lower-cased and wouldn't match `scene <name>`). The key is exactly
+/// the referrer's `file` column ([`SceneSource::label`]). Best-effort: empty when
+/// the scene list can't be read (e.g. a bare fixture with no `globalgamemanagers`).
+fn scene_name_lookup<R: EnvResolver, P: TypeTreeProvider>(
+    env: &Environment<R, P>,
+) -> std::collections::HashMap<String, String> {
+    crate::ctx::scenes(env)
+        .map(|scenes| {
+            scenes
+                .into_iter()
+                .map(|scene| (scene.source.label(), scene.name))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The distinct files that reference a target object (`references -l`).
@@ -1165,7 +1216,16 @@ pub struct ReferencingFiles {
     /// Whether the scan stopped early at `--limit` (so more files may exist).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     truncated: bool,
-    files: Vec<String>,
+    files: Vec<ReferencingFile>,
+}
+
+/// One distinct file that references the target, with its scene name when it is a
+/// built-in `levelN` scene (see [`Referrer::scene`]).
+#[derive(Serialize)]
+pub struct ReferencingFile {
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scene: Option<String>,
 }
 
 impl Render for ReferencingFiles {
@@ -1182,7 +1242,11 @@ impl Render for ReferencingFiles {
             ))
         )?;
         for file in &self.files {
-            writeln!(out, "- {}", style::name(file))?;
+            let shown = match &file.scene {
+                Some(scene) => format!("{scene} ({})", file.file),
+                None => file.file.clone(),
+            };
+            writeln!(out, "- {}", style::name(&shown))?;
         }
         Ok(())
     }
@@ -1221,11 +1285,18 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
 
     let target = object_name(handle, path_id).unwrap_or_else(|| format!("#{path_id}"));
 
+    let scenes = scene_name_lookup(handle.env);
     Ok(ReferencingFiles {
         target,
         path_id,
         truncated,
-        files,
+        files: files
+            .into_iter()
+            .map(|file| ReferencingFile {
+                scene: scenes.get(&file).cloned(),
+                file,
+            })
+            .collect(),
     })
 }
 
