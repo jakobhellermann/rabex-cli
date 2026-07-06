@@ -19,8 +19,8 @@ use rabex_env::resolver::EnvResolver;
 use rabex_env::unity::types::{Component, GameObject, Transform};
 use serde_json::Value;
 
-use crate::commands::file::component_label;
 use crate::component_path::{ComponentPath, Field};
+use crate::resolve::component_label;
 
 /// Walk a dumped object's JSON and annotate every PPtr that resolves to a
 /// scene object with a `$ref` (and, for externals, the resolved `file`).

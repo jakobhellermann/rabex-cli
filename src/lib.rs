@@ -5,6 +5,7 @@ pub mod ctx;
 pub mod locate;
 pub mod output;
 pub mod qualify;
+pub mod resolve;
 pub mod commands {
     pub mod bundle;
     pub mod file;

@@ -177,7 +177,7 @@ pub fn object_types() -> Result<Vec<CompletionCandidate>> {
             }
             if class_id == ClassId::MonoBehaviour
                 && let Ok(script) =
-                    crate::commands::file::component_label(handle, PPtr::local(obj.path_id()))
+                    crate::resolve::component_label(handle, PPtr::local(obj.path_id()))
                 && script != class
                 && seen.insert(script.clone())
             {

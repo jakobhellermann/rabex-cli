@@ -9,6 +9,7 @@ use rabex_cli::commands::file;
 use rabex_cli::commands::file::Components;
 use rabex_cli::component_path::{parse as parse_path, parse_object_ref};
 use rabex_cli::output::{Render, emit};
+use rabex_cli::resolve::resolve_object_ref;
 
 const PATH: &str = "level0";
 
@@ -174,7 +175,7 @@ fn cat_dumps_gameobject_by_path() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let path_id = file::resolve_object_ref(file, &parse_object_ref("Player").unwrap()).unwrap();
+        let path_id = resolve_object_ref(file, &parse_object_ref("Player").unwrap()).unwrap();
         let value = file::dump_path_id(file, path_id).unwrap();
 
         // The GameObject's sole component is the Transform, whose PPtr gains a
@@ -193,7 +194,7 @@ fn cat_dumps_component_by_path() {
 
     with_handle(PATH, bytes, |file| {
         let path_id =
-            file::resolve_object_ref(file, &parse_object_ref("Player@Transform").unwrap()).unwrap();
+            resolve_object_ref(file, &parse_object_ref("Player@Transform").unwrap()).unwrap();
         let value = file::dump_path_id(file, path_id).unwrap();
 
         // A Transform points back at its GameObject, with a $ref.
@@ -293,8 +294,7 @@ fn obj_resolves_by_class_name() {
     with_handle(PATH, bytes, |file| {
         // "Transform" is neither a hierarchy name nor an m_Name here, so it
         // resolves by class — the GameObject's sole component.
-        let path_id =
-            file::resolve_object_ref(file, &parse_object_ref("Transform").unwrap()).unwrap();
+        let path_id = resolve_object_ref(file, &parse_object_ref("Transform").unwrap()).unwrap();
         let value = file::dump_path_id(file, path_id).unwrap();
         assert_eq!(value["m_GameObject"]["$ref"], "Player");
     });
@@ -305,7 +305,7 @@ fn cat_missing_path_errors() {
     let (bytes, _) = Flat::new(&["Player"]).write();
 
     with_handle(PATH, bytes, |file| {
-        let err = file::resolve_object_ref(file, &parse_object_ref("Nope").unwrap()).unwrap_err();
+        let err = resolve_object_ref(file, &parse_object_ref("Nope").unwrap()).unwrap_err();
         assert!(err.to_string().contains("Nope"), "{err}");
     });
 }
