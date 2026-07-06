@@ -80,6 +80,8 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                         args.include_preloads,
                         &args.include,
                         &args.exclude,
+                        &args.include_type,
+                        &args.exclude_type,
                         args.limit,
                     )?,
                     format,
@@ -93,6 +95,8 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                         args.include_preloads,
                         &args.include,
                         &args.exclude,
+                        &args.include_type,
+                        &args.exclude_type,
                         args.limit,
                     )?,
                     format,
@@ -1157,10 +1161,13 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
     include_preloads: bool,
     include: &[String],
     exclude: &[String],
+    include_type: &[String],
+    exclude_type: &[String],
     limit: Option<usize>,
 ) -> Result<ObjectReferences> {
     let target_file = file_location.external_name();
     let filter = find_references::PathFilter::new(include, exclude);
+    let type_filter = find_references::TypeFilter::new(include_type, exclude_type);
     let (mut referrers, truncated) = find_references::referencing_objects(
         handle.env,
         &target_file,
@@ -1168,6 +1175,7 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
         include_preloads,
         false,
         &filter,
+        &type_filter,
         limit,
     )?;
     referrers.sort();
@@ -1271,10 +1279,13 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
     include_preloads: bool,
     include: &[String],
     exclude: &[String],
+    include_type: &[String],
+    exclude_type: &[String],
     limit: Option<usize>,
 ) -> Result<ReferencingFiles> {
     let target_file = file_location.external_name();
     let filter = find_references::PathFilter::new(include, exclude);
+    let type_filter = find_references::TypeFilter::new(include_type, exclude_type);
     let (referrers, truncated) = find_references::referencing_objects(
         handle.env,
         &target_file,
@@ -1282,6 +1293,7 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
         include_preloads,
         true,
         &filter,
+        &type_filter,
         limit,
     )?;
 
@@ -1352,6 +1364,58 @@ mod find_references {
                 return false;
             }
             !self.exclude.iter().any(|e| path.contains(e))
+        }
+    }
+
+    /// Case-insensitive substring allow/deny list over referrer object types
+    /// (class name, or script class name for MonoBehaviours).
+    pub struct TypeFilter {
+        include: Vec<String>,
+        exclude: Vec<String>,
+    }
+
+    impl TypeFilter {
+        pub fn new(include: &[String], exclude: &[String]) -> Self {
+            let lower = |v: &[String]| v.iter().map(|s| s.to_lowercase()).collect();
+            TypeFilter {
+                include: lower(include),
+                exclude: lower(exclude),
+            }
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.include.is_empty() && self.exclude.is_empty()
+        }
+
+        /// Resolve the type label of `object` and check it against the filter.
+        /// For MonoBehaviours this resolves the script class name (e.g.
+        /// `PlayMakerFSM`); for other objects it uses the ClassId name (e.g.
+        /// `GameObject`, `AnimationClip`).
+        fn accepts<R: EnvResolver, P: TypeTreeProvider>(
+            &self,
+            handle: &SerializedFileHandle<'_, R, P>,
+            class_id: ClassId,
+            path_id: PathId,
+        ) -> bool {
+            if self.is_empty() {
+                return true;
+            }
+            let type_label = if class_id == ClassId::MonoBehaviour {
+                match handle.object_at::<()>(path_id) {
+                    Ok(obj) => match obj.mono_script() {
+                        Ok(Some(script)) => script.m_ClassName,
+                        _ => "MonoBehaviour".to_owned(),
+                    },
+                    Err(_) => "MonoBehaviour".to_owned(),
+                }
+            } else {
+                class_id.name().unwrap_or("Unknown").to_owned()
+            };
+            let type_label = type_label.to_lowercase();
+            if !self.include.is_empty() && !self.include.iter().any(|i| type_label.contains(i)) {
+                return false;
+            }
+            !self.exclude.iter().any(|e| type_label.contains(e))
         }
     }
 
@@ -1442,6 +1506,7 @@ mod find_references {
         include_preloads: bool,
         first_only: bool,
         filter: &PathFilter,
+        type_filter: &TypeFilter,
         acc: &mut Referrers,
     ) -> Result<()> {
         let display = candidate.display();
@@ -1473,6 +1538,7 @@ mod find_references {
                         target_path_id,
                         include_preloads,
                         first_only,
+                        type_filter,
                         acc,
                     )?;
                 }
@@ -1493,6 +1559,7 @@ mod find_references {
                     target_path_id,
                     include_preloads,
                     first_only,
+                    type_filter,
                     acc,
                 )
             }
@@ -1516,6 +1583,7 @@ mod find_references {
         include_preloads: bool,
         first_only: bool,
         filter: &PathFilter,
+        type_filter: &TypeFilter,
         limit: Option<usize>,
     ) -> Result<(Referrers, bool)> {
         let Some(limit) = limit else {
@@ -1530,6 +1598,7 @@ mod find_references {
                         include_preloads,
                         first_only,
                         filter,
+                        type_filter,
                         acc,
                     )
                 },
@@ -1561,6 +1630,7 @@ mod find_references {
                 include_preloads,
                 first_only,
                 filter,
+                type_filter,
                 &mut acc,
             )?;
             if acc.len() > before {
@@ -1590,6 +1660,7 @@ mod find_references {
         target_path_id: PathId,
         include_preloads: bool,
         first_only: bool,
+        type_filter: &TypeFilter,
         acc: &mut Referrers,
     ) -> Result<()> {
         // `acc` accumulates across files in the fold; compare against its length
@@ -1608,6 +1679,10 @@ mod find_references {
                     ClassId::AssetBundle | ClassId::PreloadData
                 )
             {
+                continue;
+            }
+            // Type filter: skip objects whose class/script name doesn't match.
+            if !type_filter.accepts(handle, object.class_id(), object.path_id()) {
                 continue;
             }
             for pptr in object.reachable_one()? {

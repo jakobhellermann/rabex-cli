@@ -352,6 +352,19 @@ pub struct ReferencesArgs {
     /// Repeatable; takes precedence over `--include`.
     #[arg(long, value_name = "SUBSTR", add = ArgValueCandidates::new(|| crate::complete::referrer_files().unwrap_or_default()))]
     pub exclude: Vec<String>,
+    /// Only keep referrers whose type (class name, or script class name for
+    /// MonoBehaviours) contains this substring (case-insensitive).
+    /// Repeatable; a referrer matching any is kept.
+    /// Example: `--include-type MonoBehaviour` keeps only components,
+    /// `--include-type PlayMakerFSM` keeps only PlayMakerFSM components.
+    #[arg(long, value_name = "SUBSTR")]
+    pub include_type: Vec<String>,
+    /// Skip referrers whose type (class name, or script class name for
+    /// MonoBehaviours) contains this substring (case-insensitive).
+    /// Repeatable; takes precedence over `--include-type`.
+    /// Example: `--exclude-type GameObject` filters out GameObject referrers.
+    #[arg(long, value_name = "SUBSTR")]
+    pub exclude_type: Vec<String>,
     /// Show at most this many referrers (the first N after sorting). The header
     /// still reports the full total.
     #[arg(long, value_name = "N")]
