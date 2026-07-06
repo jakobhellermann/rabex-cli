@@ -1,0 +1,78 @@
+name: Release
+
+# Auto-release driven by the version in Cargo.toml: on every push to main the
+# version is read, and if no `v<version>` tag exists yet a release is created
+# (tagged at that commit) with prebuilt binaries attached. Bumping the version
+# in Cargo.toml is the release trigger — no manual tagging.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is-new: ${{ steps.check.outputs.is-new }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rabex-cli") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "rabex-cli version: $version"
+      - name: Check whether the tag already exists
+        id: check
+        run: |
+          if git ls-remote --exit-code --tags origin \
+               "refs/tags/v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "is-new=false" >> "$GITHUB_OUTPUT"
+            echo "tag v${{ steps.version.outputs.version }} exists → nothing to release"
+          else
+            echo "is-new=true" >> "$GITHUB_OUTPUT"
+            echo "tag v${{ steps.version.outputs.version }} is new → releasing"
+          fi
+
+  create-release:
+    needs: info
+    if: needs.info.outputs.is-new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the tag + release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.info.outputs.version }}
+          generate_release_notes: true
+
+  upload-assets:
+    needs: [info, create-release]
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # for taiki-e/upload-rust-binary-action
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: rabex
+          target: ${{ matrix.target }}
+          tar: unix
+          zip: windows
+          ref: refs/tags/v${{ needs.info.outputs.version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
