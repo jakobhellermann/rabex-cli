@@ -60,7 +60,17 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
         FileVerb::Object(args) => {
             let path_id = resolve_object_ref(file, &args.reference)?;
             match args.verb.unwrap_or(ObjectVerb::Info) {
-                ObjectVerb::Info => emit(&object_info(file, path_id)?, format, &mut out),
+                ObjectVerb::Info => {
+                    emit(&object_info(file, path_id)?, format, &mut out)?;
+                    // `object <id>` alone only summarises; nudge towards `cat` for
+                    // the deserialized fields. On stderr so it reaches both formats
+                    // without polluting stdout (the JSON document stays clean).
+                    eprintln!(
+                        "{}",
+                        style::dim("(metadata only, append `cat` to dump the object's fields)")
+                    );
+                    Ok(())
+                }
                 ObjectVerb::Cat => emit(&dump_path_id(file, path_id)?, format, &mut out),
                 ObjectVerb::References(args) if args.files_with_matches => emit(
                     &object_referencing_files(
