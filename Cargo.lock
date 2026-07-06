@@ -785,6 +785,7 @@ dependencies = [
 [[package]]
 name = "rabex-env"
 version = "0.1.0"
+source = "git+https://github.com/jakobhellermann/rabex-env#34198d6fbb15efd1da8a02c7489063a1501b9531"
 dependencies = [
  "anyhow",
  "byteorder",
