@@ -1,8 +1,6 @@
 //! Core logic tests — drive the extracted `list`/`dump`/`tree` builders against
 //! an in-memory fixture file. No filesystem, no game directory.
 
-mod fixtures;
-
 use fixtures::{Flat, with_handle};
 use rabex_cli::cli::Format;
 use rabex_cli::commands::file;
@@ -10,6 +8,7 @@ use rabex_cli::commands::file::Components;
 use rabex_cli::component_path::{parse as parse_path, parse_object_ref};
 use rabex_cli::output::{Render, emit};
 use rabex_cli::resolve::resolve_object_ref;
+use rabex_env_testkit as fixtures;
 
 const PATH: &str = "level0";
 

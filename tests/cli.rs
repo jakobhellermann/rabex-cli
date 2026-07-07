@@ -3,12 +3,11 @@
 //! tests the layout mimics a Unity game (`*_Data/`). Nothing binary is
 //! committed; the bytes are synthesized per test.
 
-mod fixtures;
-
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use fixtures::Flat;
+use rabex_env_testkit as fixtures;
 use tempfile::TempDir;
 
 /// The CAB name used by [`standalone_bundle`].

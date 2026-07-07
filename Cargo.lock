@@ -746,9 +746,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rabex"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6faf51b5a5e8f55cdf49fec3b2c8d13e61cb05642c8ad25c5bd8e1fd116f91da"
+checksum = "1e35b38fcdeda81628e4350a518d7f97b6ba41adb0cfd0c42b94767eb2b5b65d"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -774,6 +774,7 @@ dependencies = [
  "predicates",
  "rabex",
  "rabex-env",
+ "rabex-env-testkit",
  "rayon",
  "rustc-hash",
  "serde",
@@ -785,7 +786,7 @@ dependencies = [
 [[package]]
 name = "rabex-env"
 version = "0.1.0"
-source = "git+https://github.com/jakobhellermann/rabex-env#34198d6fbb15efd1da8a02c7489063a1501b9531"
+source = "git+https://github.com/jakobhellermann/rabex-env#f36ead5fd27a99efdbe3aed5134c7de58b8b8e99"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -801,6 +802,13 @@ dependencies = [
  "tracing",
  "unity-typetree-gen",
  "walkdir",
+]
+
+[[package]]
+name = "rabex-env-testkit"
+version = "0.1.0"
+dependencies = [
+ "rabex-env",
 ]
 
 [[package]]
@@ -1136,9 +1144,9 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "unity-typetree-gen"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202e283b9fd2fa485035dce70625cb7cf33a1a5664b441f95413b6f088faa0f5"
+checksum = "884760059825ec32c852b930810df6157a0f71c5d988daf71e947c5b1dbf3be5"
 dependencies = [
  "dotnetdll",
  "rabex",
