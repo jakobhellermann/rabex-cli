@@ -233,7 +233,7 @@ pub fn object_references_jq<R: EnvResolver + 'static, P: TypeTreeProvider + Sync
     let target_file = file_location.external_name();
     let path_filter = find_references::PathFilter::new(include, exclude);
     let type_filter = find_references::TypeFilter::new(include_type, exclude_type);
-    let (referrers, _truncated) = find_references::referencing_objects(
+    let (mut referrers, _truncated) = find_references::referencing_objects(
         handle.env,
         &target_file,
         path_id,
@@ -243,6 +243,12 @@ pub fn object_references_jq<R: EnvResolver + 'static, P: TypeTreeProvider + Sync
         &type_filter,
         limit,
     )?;
+    // `referencing_objects` can overshoot `limit` within a candidate; sort + truncate to the
+    // globally-first `limit`, matching the plain `references` listing.
+    referrers.sort();
+    if let Some(limit) = limit {
+        referrers.truncate(limit);
+    }
 
     let env = handle.env;
     let scenes = SceneIndex::build(env)?;

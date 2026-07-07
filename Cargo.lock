@@ -990,7 +990,7 @@ dependencies = [
 [[package]]
 name = "rabex-env"
 version = "0.1.0"
-source = "git+https://github.com/jakobhellermann/rabex-env#eb479245ac53c118324600866e23c06e3267235e"
+source = "git+https://github.com/jakobhellermann/rabex-env#10c021ab91ef1f0d08f94a917ae30c732d5ffad6"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1018,7 +1018,7 @@ dependencies = [
 [[package]]
 name = "rabex-jq"
 version = "0.1.0"
-source = "git+https://github.com/jakobhellermann/rabex-env#eb479245ac53c118324600866e23c06e3267235e"
+source = "git+https://github.com/jakobhellermann/rabex-env#10c021ab91ef1f0d08f94a917ae30c732d5ffad6"
 dependencies = [
  "anyhow",
  "jaq-core",
