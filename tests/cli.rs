@@ -154,6 +154,53 @@ fn file_object_cat_dumps_json() {
     assert_eq!(value["m_Name"], "Player");
 }
 
+/// `--jq` runs a query over the enriched object: `_file` is tagged, PPtrs are qualified with a
+/// `class_id`, and `deref` follows one back to its target.
+#[test]
+fn file_object_cat_jq_runs_query() {
+    let (_tmp, path, go_ids) = standalone_file(&["Player"]);
+    let go = go_ids[0].to_string();
+
+    // Enrichment: the `_file` tag (the path the object was read from).
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .args(["object", &go, "cat", "--jq", "._file"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("level0"));
+
+    // Qualified PPtr: the GameObject's first component is its Transform.
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .args([
+            "object",
+            &go,
+            "cat",
+            "--jq",
+            ".m_Component[0].component.class_id",
+        ])
+        .assert()
+        .success()
+        .stdout("\"Transform\"\n");
+
+    // `deref` follows the Transform back to the GameObject it hangs on.
+    rabex()
+        .arg("file")
+        .arg(&path)
+        .args([
+            "object",
+            &go,
+            "cat",
+            "--jq",
+            ".m_Component[0].component | deref | go | .m_Name",
+        ])
+        .assert()
+        .success()
+        .stdout("\"Player\"\n");
+}
+
 /// A negative path id (common in real bundles) must be accepted as the value,
 /// not rejected as an unknown flag. It fails later as "no such object".
 #[test]

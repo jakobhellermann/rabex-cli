@@ -329,9 +329,22 @@ pub enum ObjectVerb {
     /// Object summary (class, name).
     Info,
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
-    Cat,
+    Cat(CatArgs),
     /// Find every object that references this one (local or from another file).
     References(ReferencesArgs),
+}
+
+#[derive(Args, Default)]
+pub struct CatArgs {
+    /// Run a jq query over the object instead of dumping it. The object is enriched first: every
+    /// PPtr becomes `{file, path_id, class_id}` and `deref` follows it; `_file` / `_scene` / `_type`
+    /// are added. Builtins from `defs.jq` are available (`go`, `transform`, `parent`, `path`,
+    /// `components`, …). Example: `--jq 'go | path'`.
+    #[arg(long, value_name = "FILTER")]
+    pub jq: Option<String>,
+    /// Like `--jq`, but read the filter from a file.
+    #[arg(long, value_name = "PATH", conflicts_with = "jq")]
+    pub jq_file: Option<PathBuf>,
 }
 
 #[derive(Args)]

@@ -6,7 +6,7 @@
 
 use std::io::Write;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rabex_env::Environment;
 use rabex_env::addressables::ArchivePath;
 use rabex_env::handle::SerializedFileHandle;
@@ -16,7 +16,7 @@ use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use serde::Serialize;
 
-use crate::cli::{FileVerb, Format, InfoArgs, ObjectVerb};
+use crate::cli::{CatArgs, FileVerb, Format, InfoArgs, ObjectVerb};
 use crate::component_path::ComponentPath;
 use crate::output::{Render, emit, style};
 use crate::resolve::{
@@ -47,7 +47,7 @@ impl FileLocation {
 
 /// Run a [`FileVerb`] against a resolved serialized file. Shared by the
 /// `scene`, `file` and `bundle <path> file <cab>` commands.
-pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
+pub fn run_verb<R: EnvResolver + 'static, P: TypeTreeProvider + Sync + 'static>(
     file_location: FileLocation,
     file: &SerializedFileHandle<'_, R, P>,
     verb: Option<FileVerb>,
@@ -82,7 +82,10 @@ pub fn run_verb<R: EnvResolver, P: TypeTreeProvider + Sync>(
                     );
                     Ok(())
                 }
-                ObjectVerb::Cat => emit(&dump_path_id(file, path_id)?, format, &mut out),
+                ObjectVerb::Cat(args) => match jq_filter(&args)? {
+                    Some(filter) => object_jq(file, &file_location, path_id, &filter, &mut out),
+                    None => emit(&dump_path_id(file, path_id)?, format, &mut out),
+                },
                 ObjectVerb::References(args) if args.files_with_matches => emit(
                     &references::object_referencing_files(
                         &file_location,
@@ -322,6 +325,63 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     let mut value = object.read()?;
     crate::qualify::qualify(file, &mut value);
     Ok(value)
+}
+
+/// The jq filter for `object … cat`, from `--jq` or `--jq-file` (or `None` for a plain dump).
+fn jq_filter(args: &CatArgs) -> Result<Option<String>> {
+    if let Some(filter) = &args.jq {
+        Ok(Some(filter.clone()))
+    } else if let Some(path) = &args.jq_file {
+        Ok(Some(std::fs::read_to_string(path).with_context(|| {
+            format!("reading jq file {}", path.display())
+        })?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Run a jq `filter` over object `path_id`. The object is enriched first (see [`rabex_jq::enrich`]):
+/// PPtrs become `{file, path_id, class_id}` that `deref` can follow, and `_file` / `_scene` /
+/// `_type` are added. Each result value is printed as pretty JSON. This is a distinct output path
+/// from the `--format`-controlled dump, so `--format` doesn't apply here.
+fn object_jq<R: EnvResolver + 'static, P: TypeTreeProvider + 'static>(
+    file: &SerializedFileHandle<'_, R, P>,
+    file_location: &FileLocation,
+    path_id: PathId,
+    filter: &str,
+    out: &mut impl Write,
+) -> Result<()> {
+    use rabex_jq::jaq_json::{self, Val};
+    use rabex_jq::{Enrich, QueryRunner, SceneIndex, enrich};
+
+    let path = file_location.external_name();
+    let object = file.object_at::<Val>(path_id)?;
+    let script = object.mono_script()?;
+    let mut value = object.read()?;
+
+    let scenes = SceneIndex::build(file.env)?;
+    enrich(
+        &mut value,
+        &path,
+        file,
+        Enrich {
+            scenes: Some(&scenes),
+            script: script.as_ref(),
+        },
+    )?;
+
+    let runner = QueryRunner::new(filter)?;
+    let pp = jaq_json::write::Pp {
+        indent: Some("  ".to_string()),
+        sep_space: true,
+        ..Default::default()
+    };
+    for result in runner.exec(file.env, value)? {
+        let mut buf = Vec::new();
+        jaq_json::write::write(&mut buf, &pp, 0, &result).expect("writing to a Vec cannot fail");
+        writeln!(out, "{}", String::from_utf8_lossy(&buf))?;
+    }
+    Ok(())
 }
 
 /// Map an external archive path back to its readable bundle filename, if known.

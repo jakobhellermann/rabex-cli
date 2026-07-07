@@ -95,7 +95,7 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
                     let (handle, location, asset) = ctx::open_addressable(&env, &args.key)?;
                     let verb = FileVerb::Object(ObjectArgs {
                         reference: ObjectRef::PathId(asset),
-                        verb: Some(ObjectVerb::Cat),
+                        verb: Some(ObjectVerb::Cat(Default::default())),
                     });
                     commands::file::run_verb(location, &handle, Some(verb), format)
                 }
