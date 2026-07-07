@@ -86,36 +86,55 @@ pub fn run_verb<R: EnvResolver + 'static, P: TypeTreeProvider + Sync + 'static>(
                     Some(filter) => object_jq(file, &file_location, path_id, &filter, &mut out),
                     None => emit(&dump_path_id(file, path_id)?, format, &mut out),
                 },
-                ObjectVerb::References(args) if args.files_with_matches => emit(
-                    &references::object_referencing_files(
-                        &file_location,
-                        file,
-                        path_id,
-                        args.include_preloads,
-                        &args.include,
-                        &args.exclude,
-                        &args.include_type,
-                        &args.exclude_type,
-                        args.limit,
-                    )?,
-                    format,
-                    &mut out,
-                ),
-                ObjectVerb::References(args) => emit(
-                    &references::object_references(
-                        &file_location,
-                        file,
-                        path_id,
-                        args.include_preloads,
-                        &args.include,
-                        &args.exclude,
-                        &args.include_type,
-                        &args.exclude_type,
-                        args.limit,
-                    )?,
-                    format,
-                    &mut out,
-                ),
+                ObjectVerb::References(args) => match &args.verb {
+                    // `references cat [--jq …]`: load and query every referring object.
+                    Some(crate::cli::ReferencesVerb::Cat(cat)) => {
+                        let filter = jq_filter(cat)?.unwrap_or_else(|| ".".to_string());
+                        references::object_references_jq(
+                            &file_location,
+                            file,
+                            path_id,
+                            args.include_preloads,
+                            &args.include,
+                            &args.exclude,
+                            &args.include_type,
+                            &args.exclude_type,
+                            args.limit,
+                            &filter,
+                            &mut out,
+                        )
+                    }
+                    None if args.files_with_matches => emit(
+                        &references::object_referencing_files(
+                            &file_location,
+                            file,
+                            path_id,
+                            args.include_preloads,
+                            &args.include,
+                            &args.exclude,
+                            &args.include_type,
+                            &args.exclude_type,
+                            args.limit,
+                        )?,
+                        format,
+                        &mut out,
+                    ),
+                    None => emit(
+                        &references::object_references(
+                            &file_location,
+                            file,
+                            path_id,
+                            args.include_preloads,
+                            &args.include,
+                            &args.exclude,
+                            &args.include_type,
+                            &args.exclude_type,
+                            args.limit,
+                        )?,
+                        format,
+                        &mut out,
+                    ),
+                },
             }
         }
         FileVerb::References => emit(

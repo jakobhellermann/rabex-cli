@@ -382,6 +382,15 @@ pub struct ReferencesArgs {
     /// still reports the full total.
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
+    #[command(subcommand)]
+    pub verb: Option<ReferencesVerb>,
+}
+
+#[derive(Subcommand)]
+pub enum ReferencesVerb {
+    /// Load each referring object and run a jq query over it (like `object … cat --jq`, per
+    /// referrer). Great for extracting a field from every instance of a component game-wide.
+    Cat(CatArgs),
 }
 
 use crate::component_path::ComponentPath;

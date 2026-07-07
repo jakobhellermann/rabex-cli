@@ -199,7 +199,7 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
         truncated,
         referrers: referrers
             .into_iter()
-            .map(|(file, path_id, label)| Referrer {
+            .map(|(file, _load, path_id, label)| Referrer {
                 scene: scenes.get(&file).cloned(),
                 file,
                 path_id,
@@ -207,6 +207,95 @@ pub fn object_references<R: EnvResolver, P: TypeTreeProvider + Sync>(
             })
             .collect(),
     })
+}
+
+/// `object <ref> references cat [--jq FILTER]`: load every referring object, [`enrich`] it, and run
+/// `filter` (default `.`) over it — i.e. `object … cat --jq` applied to every instance game-wide.
+/// Each result is printed as pretty JSON. Referrers are re-read through their loadable path (an
+/// `archive:/…` entry for a bundle), so this spans every scene/bundle a referrer lives in.
+#[allow(clippy::too_many_arguments)]
+pub fn object_references_jq<R: EnvResolver + 'static, P: TypeTreeProvider + Sync + 'static>(
+    file_location: &FileLocation,
+    handle: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+    include_preloads: bool,
+    include: &[String],
+    exclude: &[String],
+    include_type: &[String],
+    exclude_type: &[String],
+    limit: Option<usize>,
+    filter: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    use rabex_jq::jaq_json::{self, Val};
+    use rabex_jq::{Enrich, QueryRunner, SceneIndex, enrich};
+
+    let target_file = file_location.external_name();
+    let path_filter = find_references::PathFilter::new(include, exclude);
+    let type_filter = find_references::TypeFilter::new(include_type, exclude_type);
+    let (referrers, _truncated) = find_references::referencing_objects(
+        handle.env,
+        &target_file,
+        path_id,
+        include_preloads,
+        false,
+        &path_filter,
+        &type_filter,
+        limit,
+    )?;
+
+    let env = handle.env;
+    let scenes = SceneIndex::build(env)?;
+    let runner = QueryRunner::new(filter)?;
+    let pp = jaq_json::write::Pp {
+        indent: Some("  ".to_string()),
+        sep_space: true,
+        ..Default::default()
+    };
+
+    let mut failed = 0usize;
+    for (display, load, referrer_id, _label) in referrers {
+        // One bad referrer (e.g. a query that `deref`s a null field) must not abort a game-wide
+        // sweep — report it on stderr and keep going, but remember to fail the command at the end.
+        let mut run = || -> Result<()> {
+            let file = env.load_serialized(&load)?;
+            let object = file.object_at::<Val>(referrer_id)?;
+            let script = object.mono_script()?;
+            let mut value = object.read()?;
+            enrich(
+                &mut value,
+                &load,
+                &file,
+                Enrich {
+                    scenes: Some(&scenes),
+                    script: script.as_ref(),
+                },
+            )?;
+            for result in runner.exec(env, value)? {
+                let mut buf = Vec::new();
+                jaq_json::write::write(&mut buf, &pp, 0, &result)
+                    .expect("writing to a Vec cannot fail");
+                writeln!(out, "{}", String::from_utf8_lossy(&buf))?;
+            }
+            Ok(())
+        };
+        if let Err(e) = run() {
+            failed += 1;
+            eprintln!(
+                "{}",
+                style::dim(&format!("{display} #{referrer_id}: {e:#}"))
+            );
+        }
+    }
+    // Successful results are already on stdout; still exit non-zero so a failing referrer isn't
+    // silently swallowed in a pipeline.
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} quer{} failed",
+            if failed == 1 { "y" } else { "ies" }
+        );
+    }
+    Ok(())
 }
 
 /// Maps each scene's serialized location to its scene name, so referrer listings
@@ -302,7 +391,7 @@ pub fn object_referencing_files<R: EnvResolver, P: TypeTreeProvider + Sync>(
     )?;
 
     // Collapse the (at most one per file) hits into a sorted, distinct file list.
-    let mut files: Vec<String> = referrers.into_iter().map(|(file, _, _)| file).collect();
+    let mut files: Vec<String> = referrers.into_iter().map(|(file, _, _, _)| file).collect();
     files.sort();
     files.dedup();
     if let Some(limit) = limit {
@@ -403,8 +492,11 @@ mod find_references {
     use rabex_env::resolver::EnvResolver;
     use rayon::iter::ParallelBridge as _;
 
-    /// A collected referrer: `(readable location, path id, object label)`.
-    type Referrers = Vec<(String, PathId, String)>;
+    /// A collected referrer: `(readable location, loadable path, path id, object label)`. The
+    /// readable location is for display (a bundle path); the loadable path is what
+    /// `Environment::load_serialized` opens (an `archive:/…` path for a bundle entry) so a referrer
+    /// can be re-read (e.g. `references cat`).
+    type Referrers = Vec<(String, String, PathId, String)>;
 
     /// Case-insensitive substring allow/deny list over referrer file paths.
     /// Lets the scan skip whole files before reading them.
@@ -770,7 +862,7 @@ mod find_references {
                             paths.get_or_insert_with(|| crate::qualify::PathResolver::new(handle));
                         super::referrer_label(paths, handle, path_id)
                     };
-                    acc.push((display.to_owned(), path_id, label));
+                    acc.push((display.to_owned(), name.to_owned(), path_id, label));
                     break;
                 }
             }
