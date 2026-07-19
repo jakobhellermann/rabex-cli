@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
-use rabex_env::addressables::binary_catalog::{ResourceLocation, resource_providers};
+use rabex_env::addressables::catalog::{ResourceLocation, resource_providers};
 use rabex_env::resolver::EnvResolver as _;
 use rabex_env::unity::types::MonoScript;
 use rabex_env::utils::par_fold_reduce;
@@ -31,7 +31,11 @@ pub struct GameInfo {
 impl Render for GameInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         writeln!(out, "{}", style::header("game directory"))?;
-        writeln!(out, "  path: {}", style::name(&self.path.display().to_string()))?;
+        writeln!(
+            out,
+            "  path: {}",
+            style::name(&self.path.display().to_string())
+        )?;
         writeln!(out, "  unity version: {}", self.unity_version)?;
         writeln!(out, "  serialized files: {}", self.serialized_files)?;
         let addressables = if self.addressables { "yes" } else { "no" };
@@ -219,9 +223,8 @@ pub fn addressable_stats(env: &Environment, format: Format) -> Result<()> {
     let mut by_provider: std::collections::HashMap<String, usize> = Default::default();
     let mut by_type: std::collections::HashMap<String, usize> = Default::default();
 
-    for mut catalog in addressables.catalogs(&env.game_files)? {
+    for catalog in addressables.catalogs(&env.game_files)? {
         catalogs += 1;
-        let catalog = catalog.read()?;
         keys += catalog.resources.len();
         for loc in catalog.locations() {
             refs += 1;
@@ -395,8 +398,7 @@ pub fn addressable_info(
     // The catalog maps a key to a list of locations; that — not the per-location
     // `primary_key`, which isn't unique — is what the key resolves to.
     let mut raw = Vec::new();
-    for mut catalog in addressables.catalogs(&env.game_files)? {
-        let catalog = catalog.read()?;
+    for catalog in addressables.catalogs(&env.game_files)? {
         if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
             raw.extend(locs.iter().cloned());
         }

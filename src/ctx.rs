@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
-use rabex_env::addressables::binary_catalog::{ResourceLocation, resource_providers};
+use rabex_env::addressables::catalog::{ResourceLocation, resource_providers};
 use rabex_env::env::Data;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
@@ -260,8 +260,7 @@ pub fn open_addressable<'a>(
     // evaluated internal id) we later look the main asset up by.
     let mut bundled = Vec::new();
     let mut other_providers = Vec::new();
-    for mut catalog in addressables.catalogs(&env.game_files)? {
-        let catalog = catalog.read()?;
+    for catalog in addressables.catalogs(&env.game_files)? {
         if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
             for loc in locs {
                 if loc.provider_id.as_str() == resource_providers::BUNDLED_ASSET {
@@ -334,8 +333,7 @@ pub fn addressable_keys(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if let Some(addressables) = env.addressables()? {
-        for mut catalog in addressables.catalogs(&env.game_files)? {
-            let catalog = catalog.read()?;
+        for catalog in addressables.catalogs(&env.game_files)? {
             for (key, locations) in &catalog.resources {
                 if !include_asset_bundles
                     && !locations.is_empty()
@@ -372,8 +370,7 @@ pub fn scenes<R: EnvResolver, P: TypeTreeProvider>(env: &Environment<R, P>) -> R
     let mut addressable = BTreeMap::new();
     if let Some(addressables) = env.addressables()? {
         let build_folder = addressables.build_folder();
-        for mut catalog in addressables.catalogs(&env.game_files)? {
-            let catalog = catalog.read()?;
+        for catalog in addressables.catalogs(&env.game_files)? {
             for loc in catalog.locations() {
                 if loc.provider_id.as_str() != resource_providers::BUNDLED_ASSET
                     || loc.type_.m_ClassName.as_str() != SCENE_INSTANCE_CLASS
