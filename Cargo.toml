@@ -35,3 +35,7 @@ rabex-env-testkit = { path = "../rabex-env/crates/rabex-env-testkit" }
 
 [lints.clippy]
 too_many_arguments = "allow"
+
+# [patch."https://github.com/jakobhellermann/rabex-env"]
+# rabex-env = { path = "../rabex-env" }
+# rabex-jq = { path = "../rabex-env/crates/rabex-jq" }
