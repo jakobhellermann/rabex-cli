@@ -12,6 +12,7 @@ use rabex_env::resolver::EnvResolver as _;
 use rabex_env::unity::types::MonoScript;
 use rabex_env::utils::par_fold_reduce;
 use serde::Serialize;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::cli::Format;
 use crate::ctx;
@@ -468,12 +469,15 @@ pub struct Scenes(pub Vec<SceneEntry>);
 
 impl Render for Scenes {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
-        let width = self.0.iter().map(|s| s.name.len()).max().unwrap_or(0);
+        // Pad by terminal display width, not `char`/byte count, so CJK (and other
+        // wide) scene names still line up.
+        let width = self.0.iter().map(|s| s.name.width()).max().unwrap_or(0);
         for scene in &self.0 {
+            let padding = " ".repeat(width - scene.name.width());
             writeln!(
                 out,
-                "{}  {}",
-                style::name(&format!("{:<width$}", scene.name)),
+                "{}{padding}  {}",
+                style::name(&scene.name),
                 style::dim(&scene.source)
             )?;
         }
