@@ -20,6 +20,7 @@ use crate::output::{Render, emit, style};
 /// Summary of a unity game directory.
 #[derive(Serialize)]
 pub struct GameInfo {
+    path: PathBuf,
     unity_version: String,
     serialized_files: usize,
     addressables: bool,
@@ -30,6 +31,7 @@ pub struct GameInfo {
 impl Render for GameInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
         writeln!(out, "{}", style::header("game directory"))?;
+        writeln!(out, "  path: {}", style::name(&self.path.display().to_string()))?;
         writeln!(out, "  unity version: {}", self.unity_version)?;
         writeln!(out, "  serialized files: {}", self.serialized_files)?;
         let addressables = if self.addressables { "yes" } else { "no" };
@@ -59,6 +61,7 @@ pub fn info(env: &Environment, format: Format) -> Result<()> {
     };
 
     let info = GameInfo {
+        path: env.game_files.game_dir.clone(),
         unity_version,
         serialized_files,
         addressables,

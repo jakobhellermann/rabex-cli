@@ -592,6 +592,10 @@ fn game_info_reports_summary() {
         .assert()
         .success()
         .stdout(predicates::str::contains("game directory"))
+        .stdout(predicates::str::contains(format!(
+            "path: {}",
+            data_dir.display()
+        )))
         .stdout(predicates::str::contains("serialized files:"))
         .stdout(predicates::str::contains("addressables:"));
 }
