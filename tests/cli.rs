@@ -829,3 +829,130 @@ fn completion_object_ref_prefix_filters() {
         "all numeric candidates should start with 1: {ids:?}"
     );
 }
+
+/// Run the `COMPLETE=fish` shim completing the `--jq` value for
+/// `file <path> object <ref> cat --jq <current>`; returns the candidate values
+/// (the part before the `\t` help column), in order.
+fn complete_jq(path: &Path, object_ref: &str, current: &str) -> Vec<String> {
+    let assert = rabex()
+        .env("COMPLETE", "fish")
+        .arg("--")
+        .arg("rabex")
+        .arg("file")
+        .arg(path)
+        .args(["object", object_ref, "cat", "--jq"])
+        .arg(current)
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.split('\t').next().unwrap().to_owned())
+        .collect()
+}
+
+/// The enrichment keys the query sees (`_file`) are offered too.
+#[test]
+fn completion_jq_offers_enrichment_keys() {
+    let (_tmp, path, go) = standalone_file(&["Player"]);
+    assert_eq!(complete_jq(&path, &go[0].to_string(), "._"), ["._file"]);
+}
+
+/// A single descendible field (here a PPtr object) also yields the `.field.`
+/// form, so the shell fills the shared prefix instead of ending the token with a
+/// space and you can keep drilling.
+#[test]
+fn completion_jq_sole_object_offers_descend_dot() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, "Player@Transform", ".m_GameObject"),
+        [".m_GameObject", ".m_GameObject."]
+    );
+}
+
+/// A single array field yields the `.field[` form instead.
+#[test]
+fn completion_jq_sole_array_offers_descend_bracket() {
+    let (_tmp, path, go) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, &go[0].to_string(), ".m_Component"),
+        [".m_Component", ".m_Component["]
+    );
+}
+
+/// With several matches the descend form is omitted (the shell stops at the
+/// common prefix anyway) — none of the candidates carry a trailing accessor,
+/// even the descendible ones (`m_GameObject`, `m_LocalPosition`).
+#[test]
+fn completion_jq_multiple_matches_stay_bare() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, "Player@Transform", ".m_"),
+        [
+            ".m_GameObject",
+            ".m_LocalRotation",
+            ".m_LocalPosition",
+            ".m_LocalScale",
+            ".m_Children",
+            ".m_Father",
+        ]
+    );
+}
+
+/// Descending into a PPtr offers its enriched `{file, path_id, class_id}` keys —
+/// the same shape the query traverses.
+#[test]
+fn completion_jq_descends_into_pptr() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, "Player@Transform", ".m_GameObject."),
+        [
+            ".m_GameObject.file",
+            ".m_GameObject.path_id",
+            ".m_GameObject.class_id",
+        ]
+    );
+}
+
+/// A nested struct (Vector3) descends to its scalar fields.
+#[test]
+fn completion_jq_descends_into_struct() {
+    let (_tmp, path, _) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, "Player@Transform", ".m_LocalPosition."),
+        [
+            ".m_LocalPosition.x",
+            ".m_LocalPosition.y",
+            ".m_LocalPosition.z",
+        ]
+    );
+}
+
+/// jaq — not us — walks the prefix, so an explicit array index descends into that
+/// element.
+#[test]
+fn completion_jq_indexes_arrays_via_jaq() {
+    let (_tmp, path, go) = standalone_file(&["Player"]);
+    assert_eq!(
+        complete_jq(&path, &go[0].to_string(), ".m_Component[0].component."),
+        [
+            ".m_Component[0].component.file",
+            ".m_Component[0].component.path_id",
+            ".m_Component[0].component.class_id",
+        ]
+    );
+}
+
+/// A token that isn't a bare field path (a pipe, or not starting with `.`) is
+/// left to the user — no candidates.
+#[test]
+fn completion_jq_stays_out_of_real_expressions() {
+    let (_tmp, path, go) = standalone_file(&["Player"]);
+    let id = go[0].to_string();
+    assert_eq!(
+        complete_jq(&path, &id, ".m_Name|keys"),
+        Vec::<String>::new()
+    );
+    assert_eq!(complete_jq(&path, &id, "go"), Vec::<String>::new());
+}

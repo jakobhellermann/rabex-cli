@@ -17,6 +17,9 @@ use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
 
 use crate::cli::{Cli, Context};
+use crate::commands::file::FileLocation;
+use crate::component_path::ObjectRef;
+use crate::resolve::resolve_object_ref;
 use crate::{ctx, qualify};
 
 /// The concrete handle type the completion helpers operate on.
@@ -60,10 +63,11 @@ fn paths_to_candidates(paths: Vec<PathBuf>) -> Vec<CompletionCandidate> {
 }
 
 /// Resolve the serialized file selected on the command line and hand its handle
-/// to `f`. Handles `scene <name>`, `file <path>`, `bundle <path> file <cab>` and
-/// `addressable <key> file`. Returns no candidates when no such target is present.
+/// (and its external name, for enrichment) to `f`. Handles `scene <name>`,
+/// `file <path>`, `bundle <path> file <cab>` and `addressable <key> file`.
+/// Returns no candidates when no such target is present.
 fn with_target_handle(
-    f: impl FnOnce(&Handle<'_>) -> Result<Vec<CompletionCandidate>>,
+    f: impl FnOnce(&Handle<'_>, &str) -> Result<Vec<CompletionCandidate>>,
 ) -> Result<Vec<CompletionCandidate>> {
     let matches = current_matches()?;
     let game = game_args(&matches);
@@ -75,15 +79,15 @@ fn with_target_handle(
             };
             let (env, relative) = ctx::open_file(&game, path)?;
             let handle = env.load_serialized(&relative)?;
-            f(&handle)
+            f(&handle, path.to_string_lossy().as_ref())
         }
         Some(("scene", m)) => {
             let Some(name) = m.get_one::<String>("name") else {
                 return Ok(Vec::new());
             };
             let env = ctx::require_game_env(&game)?;
-            let (handle, _location) = ctx::open_scene(&env, name)?;
-            f(&handle)
+            let (handle, location) = ctx::open_scene(&env, name)?;
+            f(&handle, &location.external_name())
         }
         Some(("bundle", m)) => {
             let Some(path) = m.get_one::<PathBuf>("path") else {
@@ -97,18 +101,41 @@ fn with_target_handle(
             // main serialized file, so complete against that one.
             let cab = fm.get_one::<String>("cab").map(String::as_str);
             let handle = ctx::bundle_serialized(&env, &bundle, cab)?;
-            f(&handle)
+            let cab_name = match cab {
+                Some(cab) => cab.to_owned(),
+                None => bundle
+                    .main_serializedfile()
+                    .map(|f| f.path.clone())
+                    .unwrap_or_default(),
+            };
+            f(
+                &handle,
+                &FileLocation::Bundle { cab: cab_name }.external_name(),
+            )
         }
         Some(("addressable", m)) => {
             let Some(key) = m.get_one::<String>("key") else {
                 return Ok(Vec::new());
             };
             let env = ctx::require_game_env(&game)?;
-            let (handle, _location, _asset) = ctx::open_addressable(&env, key)?;
-            f(&handle)
+            let (handle, location, _asset) = ctx::open_addressable(&env, key)?;
+            f(&handle, &location.external_name())
         }
         _ => Ok(Vec::new()),
     }
+}
+
+/// The object reference the command line selected (`object <REF> …`), wherever
+/// the `object` verb sits under the file/scene/bundle/addressable subcommand.
+fn selected_object_ref(matches: &ArgMatches) -> Option<ObjectRef> {
+    let mut m = matches;
+    while let Some((name, sub)) = m.subcommand() {
+        if name == "object" {
+            return sub.get_one::<ObjectRef>("reference").cloned();
+        }
+        m = sub;
+    }
+    None
 }
 
 /// Object references of the selected file (for `object <ref>`): every path id
@@ -116,7 +143,7 @@ fn with_target_handle(
 /// singletons like `TagManager`), and every component path. The shell filters by
 /// prefix.
 pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
-    with_target_handle(|handle| {
+    with_target_handle(|handle, _name| {
         let mut candidates: Vec<CompletionCandidate> = handle
             .objects::<()>()
             .map(|obj| {
@@ -160,13 +187,168 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
     })
 }
 
+/// Field paths into the enriched object for `object <ref> cat --jq <FILTER>`.
+///
+/// Only a bare leading dot-path token is completed (`.m_Foo`, `.a.b.`,
+/// `.a[0].b`), one level at a time: `.a.` offers `.a.b`, `.a.c`. The already-typed
+/// path prefix is handed to jaq, so it — not us — does the traversal: array
+/// indices (`.a[0].`) and `[]` iteration (`.a[].`, whose element keys are unioned)
+/// both descend. Anything with a space, `|`, `(` or `{` is left alone — that's a
+/// real expression, not a field path. Completes against the *enriched* object (the
+/// value the query runs over), so PPtrs expose `.file` / `.path_id` / `.class_id`
+/// and the added `_file` / `_type` keys show up.
+///
+/// When the partial matches a *single* descendible field, a second candidate
+/// ending in the accessor that continues into it (`.key.` for an object, `.key[`
+/// for an array) is added too. The two shared-prefix candidates keep the shell
+/// from finishing the token with a space, so you can keep drilling in; with
+/// several matches the shell already stops at the common prefix, so it's omitted.
+pub fn jq_paths(current: &std::ffi::OsStr) -> Result<Vec<CompletionCandidate>> {
+    let Some(token) = current.to_str() else {
+        return Ok(Vec::new());
+    };
+    // Stay out of the way of real jq expressions; we only complete a field path.
+    // `[` / `]` pass through for indices — jaq evaluates the prefix and simply
+    // yields nothing useful for malformed ones.
+    if (!token.is_empty() && !token.starts_with('.'))
+        || token.contains(|c: char| c.is_whitespace() || "|(){}".contains(c))
+    {
+        return Ok(Vec::new());
+    }
+
+    let reference = selected_object_ref(&current_matches()?);
+    let Some(reference) = reference else {
+        return Ok(Vec::new());
+    };
+
+    with_target_handle(|handle, name| {
+        use rabex_jq::jaq_json::Val;
+        use rabex_jq::jaq_json::write::{self, Pp};
+        use rabex_jq::{Enrich, QueryRunner, enrich};
+
+        let path_id = resolve_object_ref(handle, &reference)?;
+        let object = handle.object_at::<Val>(path_id)?;
+        let script = object.mono_script()?;
+        let mut value = object.read()?;
+        // No `SceneIndex` here — building it parses the whole catalog, too slow for
+        // a keystroke; the only cost is `_scene` not being offered on scene objects.
+        enrich(
+            &mut value,
+            name,
+            handle,
+            Enrich {
+                scenes: None,
+                script: script.as_ref(),
+            },
+        )?;
+
+        // `base` = the token up to and including its last `.`; the tail after it is
+        // the partial key the shell filters on. The prefix jaq evaluates is `base`
+        // without that trailing `.` (`.` at the root), so jaq handles any `[n]` /
+        // `[]` accessors along the path.
+        let base = if token.is_empty() {
+            "."
+        } else {
+            let last = token.rfind('.').expect("non-empty token starts with '.'");
+            &token[..=last]
+        };
+        let prefix = base
+            .strip_suffix('.')
+            .filter(|s| !s.is_empty())
+            .unwrap_or(".");
+        let Ok(runner) = QueryRunner::new(prefix) else {
+            return Ok(Vec::new());
+        };
+
+        // The fields at the prefix that the shell would actually show (matching the
+        // partial), unioned across `[]` iteration results and deduped by accessor.
+        // Each carries the accessor (`.` / `[`) that would descend into it, if any.
+        let mut fields: Vec<(String, Option<char>, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for result in runner.exec(handle.env, value)? {
+            let mut buf = Vec::new();
+            if write::write(&mut buf, &Pp::default(), 0, &result).is_err() {
+                continue;
+            }
+            let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_slice::<serde_json::Value>(&buf)
+            else {
+                continue;
+            };
+            for (key, child) in &map {
+                // Bare jq identifiers stay `.key`; anything else must be quoted
+                // (`."data[0]"`), or jq reads the brackets as an index accessor.
+                let field = if is_jq_ident(key) {
+                    key.clone()
+                } else {
+                    serde_json::to_string(key)?
+                };
+                let leaf = format!("{base}{field}");
+                if !leaf.starts_with(token) || !seen.insert(leaf.clone()) {
+                    continue;
+                }
+                let descend = match child {
+                    serde_json::Value::Object(_) => Some('.'),
+                    serde_json::Value::Array(a) if !a.is_empty() => Some('['),
+                    _ => None,
+                };
+                fields.push((leaf, descend, value_hint(child)));
+            }
+        }
+
+        // When a single field matches, also offer the accessor that descends into
+        // it (`.foo.` / `.foo[`): the two shared-prefix candidates make the shell
+        // fill the common prefix instead of ending the token with a space, so you
+        // can keep drilling. With several matches the shell already stops at the
+        // common prefix, so the extra candidate would just be noise.
+        let sole = fields.len() == 1;
+        let mut candidates = Vec::new();
+        for (leaf, descend, hint) in fields {
+            let descend_form = descend.filter(|_| sole).map(|sep| {
+                CompletionCandidate::new(format!("{leaf}{sep}")).help(Some(hint.clone().into()))
+            });
+            candidates.push(CompletionCandidate::new(leaf).help(Some(hint.into())));
+            candidates.extend(descend_form);
+        }
+        Ok(candidates)
+    })
+}
+
+/// Whether `key` can follow a jq `.` bare (`.m_Name`) rather than needing quotes
+/// (`."data[0]"`): a leading letter/`_`, then letters/digits/`_`.
+fn is_jq_ident(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// A short one-line summary of a JSON value, shown as completion help: the scalar
+/// itself, or a `{n}` / `[n]` size for containers.
+fn value_hint(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => {
+            let preview: String = s.chars().take(40).collect();
+            let ellipsis = if preview.len() < s.len() { "…" } else { "" };
+            format!("\"{preview}{ellipsis}\"")
+        }
+        Value::Array(a) => format!("[{}]", a.len()),
+        Value::Object(o) => format!("{{{}}}", o.len()),
+    }
+}
+
 /// Object class names of the selected file (for `objects --type`): the distinct
 /// `ClassId` names, plus MonoBehaviour script class names (which `--type` also
 /// matches).
 pub fn object_types() -> Result<Vec<CompletionCandidate>> {
     use rabex_env::rabex::objects::{ClassId, PPtr};
 
-    with_target_handle(|handle| {
+    with_target_handle(|handle, _name| {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for obj in handle.objects::<()>() {
@@ -191,7 +373,7 @@ pub fn object_types() -> Result<Vec<CompletionCandidate>> {
 /// Component/script type names of the selected file (for `find <TYPE>`): the
 /// distinct `@component` labels across the hierarchy.
 pub fn component_types() -> Result<Vec<CompletionCandidate>> {
-    with_target_handle(|handle| {
+    with_target_handle(|handle, _name| {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for path in qualify::all_paths(handle) {
@@ -208,7 +390,7 @@ pub fn component_types() -> Result<Vec<CompletionCandidate>> {
 /// GameObject paths of the selected file (for `tree <path>`): the component
 /// paths without a `@component` selector.
 pub fn gameobject_paths() -> Result<Vec<CompletionCandidate>> {
-    with_target_handle(|handle| {
+    with_target_handle(|handle, _name| {
         Ok(qualify::all_paths(handle)
             .into_iter()
             .filter(|path| path.component.is_none())
@@ -329,4 +511,39 @@ pub fn steam_games() -> Vec<CompletionCandidate> {
     }
 
     inner().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_jq_ident, value_hint};
+    use serde_json::json;
+
+    #[test]
+    fn jq_ident_needs_a_leading_letter_or_underscore_then_word_chars() {
+        assert!(is_jq_ident("m_Name"));
+        assert!(is_jq_ident("_file"));
+        assert!(is_jq_ident("a1_b"));
+
+        assert!(!is_jq_ident(""));
+        assert!(!is_jq_ident("1abc"));
+        assert!(!is_jq_ident("data[0]"));
+        assert!(!is_jq_ident("with space"));
+        assert!(!is_jq_ident("a-b"));
+    }
+
+    #[test]
+    fn value_hint_summarises_each_json_kind() {
+        assert_eq!(value_hint(&json!(null)), "null");
+        assert_eq!(value_hint(&json!(true)), "true");
+        assert_eq!(value_hint(&json!(3)), "3");
+        assert_eq!(value_hint(&json!("hi")), "\"hi\"");
+        assert_eq!(value_hint(&json!([1, 2, 3])), "[3]");
+        assert_eq!(value_hint(&json!({ "a": 1, "b": 2 })), "{2}");
+    }
+
+    #[test]
+    fn value_hint_truncates_long_strings_to_40_chars() {
+        let long = "a".repeat(45);
+        assert_eq!(value_hint(&json!(long)), format!("\"{}…\"", "a".repeat(40)));
+    }
 }
