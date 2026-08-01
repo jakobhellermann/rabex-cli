@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use clap_complete::ArgValueCandidates;
+use clap_complete::{ArgValueCandidates, ArgValueCompleter};
 
 use crate::component_path::ObjectRef;
 
@@ -340,7 +340,7 @@ pub struct CatArgs {
     /// PPtr becomes `{file, path_id, class_id}` and `deref` follows it; `_file` / `_scene` / `_type`
     /// are added. Builtins from `defs.jq` are available (`go`, `transform`, `parent`, `path`,
     /// `components`, …). Example: `--jq 'go | path'`.
-    #[arg(long, value_name = "FILTER")]
+    #[arg(long, value_name = "FILTER", add = ArgValueCompleter::new(|current: &std::ffi::OsStr| crate::complete::jq_paths(current).unwrap_or_default()))]
     pub jq: Option<String>,
     /// Like `--jq`, but read the filter from a file.
     #[arg(long, value_name = "PATH", conflicts_with = "jq")]
