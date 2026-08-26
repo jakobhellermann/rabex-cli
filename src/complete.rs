@@ -468,6 +468,19 @@ pub fn addressable_keys() -> Result<Vec<CompletionCandidate>> {
         .collect())
 }
 
+/// Candidates for `script <name>`: every `MonoScript` `m_Name` found in
+/// `globalgamemanagers.assets` or a `*monoscripts*` bundle, cheap enough for a
+/// keystroke.
+pub fn script_names() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    Ok(crate::commands::game::script_name_completions(&env)?
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect())
+}
+
 /// Candidates for a `scene <name>`: built-in + addressables scene names, with
 /// their source (`levelN` / bundle) as help text.
 pub fn scene_names() -> Result<Vec<CompletionCandidate>> {

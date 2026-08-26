@@ -24,6 +24,7 @@ use rabex_env::unity::types::AssetBundle;
 
 use crate::cli::Context;
 use crate::commands::file::FileLocation;
+use crate::commands::game::{self, UnityFile};
 use crate::locate::locate_steam_game;
 
 const SCENE_INSTANCE_CLASS: &str = "UnityEngine.ResourceManagement.ResourceProviders.SceneInstance";
@@ -318,6 +319,61 @@ pub fn open_addressable<'a>(
         .with_context(|| format!("AssetBundle container has no entry '{container_key}'"))?;
 
     Ok((handle, FileLocation::Bundle { cab }, asset))
+}
+
+/// Locate the file/bundle whose `MonoScript` has this bare `m_Name` and
+/// resolve it to a handle, the [`FileLocation`] for the shared file verbs, and
+/// its path id. Errors on zero or more than one match, naming `file <path>
+/// object <name>` / `bundle <path> file object <name>` to disambiguate.
+pub fn locate_script<'a>(
+    env: &'a Environment,
+    name: &str,
+) -> Result<(SerializedFileHandle<'a>, FileLocation, PathId)> {
+    let hits = game::scripts_by_name(env, name)?;
+    let (location, path_id) = match hits.len() {
+        0 => bail!("no script named '{name}' found in any file/bundle"),
+        1 => hits.into_iter().next().unwrap(),
+        2 if let Result::<[_; 1], _>::Ok(single_item) = hits
+            .iter()
+            .filter(|(file, _)| match file {
+                UnityFile::SerializedFile(path_buf) => path_buf != "globalgamemanagers.assets",
+                UnityFile::Bundle(_) => true,
+            })
+            .collect::<Vec<_>>()
+            .try_into() =>
+        {
+            single_item[0].clone()
+        }
+        n => {
+            bail!(
+                "script '{name}' is ambiguous ({n} matches): {}; open one directly with \
+             `file <path> object {name}` (or `bundle <path> file object {name}`)",
+                hits.iter()
+                    .map(|(file, _)| file.display())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    };
+
+    let (handle, file_location) = match &location {
+        UnityFile::SerializedFile(path) => (
+            env.load_serialized(path)?,
+            FileLocation::File(location.display()),
+        ),
+        UnityFile::Bundle(bundle) => {
+            let reader = env.load_addressables_bundle(bundle)?;
+            let cab = reader
+                .main_serializedfile()
+                .context("bundle has no main serialized file")?
+                .path
+                .clone();
+            let handle = bundle_serialized(env, &reader, None)?;
+            (handle, FileLocation::Bundle { cab })
+        }
+    };
+
+    Ok((handle, file_location, path_id))
 }
 
 /// Every addressables key mapped to the distinct asset type names it resolves

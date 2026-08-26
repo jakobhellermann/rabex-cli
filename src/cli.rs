@@ -82,6 +82,9 @@ pub enum Command {
     Bundle(BundleArgs),
     /// Inspect one addressables key.
     Addressable(AddressableArgs),
+
+    /// Locate a MonoScript by name across the whole game, then run the shared object verbs on it.
+    Script(ScriptArgs),
 }
 
 // -----------------------------------------------------------------------------
@@ -240,6 +243,15 @@ pub struct AddressableInfoArgs {
 pub struct AddressableFileArgs {
     #[command(subcommand)]
     pub verb: Option<FileVerb>,
+}
+
+#[derive(Args)]
+pub struct ScriptArgs {
+    /// MonoScript name (`m_Name`, typically the class name without namespace).
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::script_names().unwrap_or_default()))]
+    pub name: String,
+    #[command(subcommand)]
+    pub verb: Option<ObjectVerb>,
 }
 
 // -----------------------------------------------------------------------------

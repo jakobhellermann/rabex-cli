@@ -105,5 +105,14 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
                 }
             }
         }
+        Command::Script(args) => {
+            let env = ctx::require_game_env(game)?;
+            let (handle, location, path_id) = ctx::locate_script(&env, &args.name)?;
+            let verb = FileVerb::Object(ObjectArgs {
+                reference: ObjectRef::PathId(path_id),
+                verb: args.verb,
+            });
+            commands::file::run_verb(location, &handle, Some(verb), format)
+        }
     }
 }

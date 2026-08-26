@@ -577,6 +577,110 @@ fn game_script_locations_filter_narrows_by_name() {
         .stdout("HeroController\n  level0\n");
 }
 
+// -----------------------------------------------------------------------------
+// script <name>
+// -----------------------------------------------------------------------------
+
+/// `script <name>` finds the file whose `MonoScript` matches `name` and runs
+/// the object verb on it directly, without a `file <path>` first.
+#[test]
+fn script_locates_across_files() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("level0"),
+        fixtures::scripts_file(&["HeroController"]),
+    )
+    .unwrap();
+    std::fs::write(
+        data_dir.join("level1"),
+        fixtures::scripts_file(&["EnemyController"]),
+    )
+    .unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["script", "EnemyController", "info"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("MonoScript"))
+        .stdout(predicates::str::contains("EnemyController"));
+}
+
+/// `script <name>` checks `globalgamemanagers.assets` first (the fast path)
+/// before falling back to a full scan.
+#[test]
+fn script_finds_scripts_in_globalgamemanagers() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("globalgamemanagers.assets"),
+        fixtures::scripts_file(&["GodfinderGateIconManager"]),
+    )
+    .unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["script", "GodfinderGateIconManager", "info"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("GodfinderGateIconManager"));
+}
+
+/// A name matching no `MonoScript` anywhere in the game fails clearly.
+#[test]
+fn script_missing_name_errors() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("level0"),
+        fixtures::scripts_file(&["HeroController"]),
+    )
+    .unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["script", "NoSuchScript"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("no script named 'NoSuchScript'"));
+}
+
+/// The same script name defined in more than one file is ambiguous: `script
+/// <name>` errors rather than picking one, listing every candidate file.
+#[test]
+fn script_ambiguous_name_errors_listing_files() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("level0"),
+        fixtures::scripts_file(&["HeroController"]),
+    )
+    .unwrap();
+    std::fs::write(
+        data_dir.join("level1"),
+        fixtures::scripts_file(&["HeroController"]),
+    )
+    .unwrap();
+
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["script", "HeroController"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("ambiguous"))
+        .stderr(predicates::str::contains("level0"))
+        .stderr(predicates::str::contains("level1"));
+}
+
 #[test]
 fn game_info_reports_summary() {
     let tmp = TempDir::new().unwrap();

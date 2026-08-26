@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
 use rabex_env::addressables::catalog::{ResourceLocation, resource_providers};
+use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::resolver::EnvResolver as _;
 use rabex_env::unity::types::MonoScript;
 use rabex_env::utils::par_fold_reduce;
@@ -122,15 +123,22 @@ impl Render for ScriptLocations {
 }
 
 /// A serialized file or an addressables bundle to scan for `MonoScript`s.
-enum UnityFile {
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum UnityFile {
     SerializedFile(PathBuf),
     Bundle(PathBuf),
 }
 
-/// Map each script to the files / addressables whose `MonoScript` objects
-/// define it. Scans every serialized file and addressables bundle in parallel;
-/// `filter` keeps only scripts whose full name contains it (case-insensitive).
-pub fn script_locations(env: &Environment, filter: Option<&str>, format: Format) -> Result<()> {
+impl UnityFile {
+    pub(crate) fn display(&self) -> String {
+        match self {
+            UnityFile::SerializedFile(path) | UnityFile::Bundle(path) => path.display().to_string(),
+        }
+    }
+}
+
+/// Every serialized file and addressables bundle in the game.
+fn all_unity_files(env: &Environment) -> Result<Vec<UnityFile>> {
     let mut files: Vec<UnityFile> = env
         .game_files
         .serialized_files()?
@@ -142,27 +150,65 @@ pub fn script_locations(env: &Environment, filter: Option<&str>, format: Format)
             .into_iter()
             .map(UnityFile::Bundle),
     );
+    Ok(files)
+}
 
-    let by_script =
-        par_fold_reduce::<BTreeMap<String, BTreeSet<String>>, _>(files, |acc, file| {
-            let (handle, location) = match file {
-                UnityFile::SerializedFile(path) => {
-                    let location = path.display().to_string();
-                    (env.load_serialized(&path)?, location)
-                }
-                UnityFile::Bundle(bundle) => {
-                    let location = bundle.display().to_string();
-                    (env.load_addressables_bundle_content(&bundle)?, location)
-                }
-            };
-            for script in handle.objects_of::<MonoScript>() {
-                let script = script.read()?;
-                acc.entry(script.full_name().into_owned())
-                    .or_default()
-                    .insert(location.clone());
-            }
-            Ok(())
-        })?;
+/// Whether `file` is where a Unity game's `MonoScript` definitions
+/// conventionally live: `globalgamemanagers.assets` (the extension-less
+/// `globalgamemanagers` never has any) or a bundle named like
+/// `*_monoscripts.bundle`.
+fn is_likely_script_file(file: &UnityFile) -> bool {
+    match file {
+        UnityFile::SerializedFile(path) => path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("globalgamemanagers.assets")),
+        UnityFile::Bundle(path) => path.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("monoscripts")
+        }),
+    }
+}
+
+/// The subset of [`all_unity_files`] passing [`is_likely_script_file`].
+fn likely_script_files(env: &Environment) -> Result<Vec<UnityFile>> {
+    Ok(all_unity_files(env)?
+        .into_iter()
+        .filter(is_likely_script_file)
+        .collect())
+}
+
+/// Scan `files` in parallel for `MonoScript` objects, grouped by `key_fn`
+/// (the namespace-qualified name, or the bare `m_Name`), each with its path id.
+fn scan_scripts(
+    env: &Environment,
+    files: Vec<UnityFile>,
+    key_fn: impl Fn(&MonoScript) -> String + Sync,
+) -> Result<BTreeMap<String, BTreeSet<(UnityFile, PathId)>>> {
+    par_fold_reduce::<BTreeMap<String, BTreeSet<(UnityFile, PathId)>>, _>(files, |acc, file| {
+        let handle = match &file {
+            UnityFile::SerializedFile(path) => env.load_serialized(path)?,
+            UnityFile::Bundle(bundle) => env.load_addressables_bundle_content(bundle)?,
+        };
+        for script in handle.objects_of::<MonoScript>() {
+            let path_id = script.path_id();
+            let script = script.read()?;
+            acc.entry(key_fn(&script))
+                .or_default()
+                .insert((file.clone(), path_id));
+        }
+        Ok(())
+    })
+}
+
+/// Map each script to the files / addressables whose `MonoScript` objects
+/// define it. Always scans the whole game, not the `likely_script_files`
+/// shortcut: an exhaustive listing can't silently miss anything. `filter`
+/// keeps only scripts whose full name contains it (case-insensitive).
+pub fn script_locations(env: &Environment, filter: Option<&str>, format: Format) -> Result<()> {
+    let by_script = scan_scripts(env, all_unity_files(env)?, |script| {
+        script.full_name().into_owned()
+    })?;
 
     let filter = filter.map(str::to_ascii_lowercase);
     let locations = by_script
@@ -173,12 +219,50 @@ pub fn script_locations(env: &Environment, filter: Option<&str>, format: Format)
         })
         .map(|(script, locations)| ScriptLocation {
             script,
-            locations: locations.into_iter().collect(),
+            locations: locations.iter().map(|(file, _)| file.display()).collect(),
         })
         .collect();
 
     let stdout = std::io::stdout();
     emit(&ScriptLocations(locations), format, &mut stdout.lock())
+}
+
+/// Every `(file, path id)` where `name` (a `MonoScript`'s bare `m_Name`, not
+/// its namespace-qualified `full_name`) is defined. Checks
+/// [`is_likely_script_file`] first, falling back to a full-game scan (warning
+/// on stderr) only if that finds nothing — both draw from one [`all_unity_files`]
+/// call, so the fallback doesn't re-walk the game directory.
+pub(crate) fn scripts_by_name(
+    env: &Environment,
+    name: &str,
+) -> Result<BTreeSet<(UnityFile, PathId)>> {
+    let all = all_unity_files(env)?;
+    let key_fn = |script: &MonoScript| script.m_Name.clone();
+
+    let fast_files = all.iter().filter(|f| is_likely_script_file(f)).cloned().collect();
+    let fast = scan_scripts(env, fast_files, key_fn)?;
+    if let Some(hits) = fast.get(name) {
+        return Ok(hits.clone());
+    }
+
+    eprintln!(
+        "warning: '{name}' isn't in the usual script locations (globalgamemanagers.assets, \
+         *monoscripts* bundles); scanning the whole game"
+    );
+    let all = scan_scripts(env, all, key_fn)?;
+    Ok(all.get(name).cloned().unwrap_or_default())
+}
+
+/// `MonoScript` names findable via [`likely_script_files`] alone: cheap enough
+/// to redo on every keystroke, unlike a full-game scan.
+pub(crate) fn script_name_completions(env: &Environment) -> Result<Vec<String>> {
+    Ok(
+        scan_scripts(env, likely_script_files(env)?, |script| {
+            script.m_Name.clone()
+        })?
+        .into_keys()
+        .collect(),
+    )
 }
 
 /// Catalog overview: counts plus a breakdown of locations by provider and type.
