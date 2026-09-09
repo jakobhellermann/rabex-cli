@@ -20,11 +20,11 @@ use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::game_files::LevelFiles;
 use rabex_env::resolver::{EnvResolver, GameFiles};
-use rabex_env::unity::types::AssetBundle;
+use rabex_env::unity::types::{AssetBundle, MonoScript};
+use rabex_env::utils::par_fold_reduce;
 
 use crate::cli::Context;
 use crate::commands::file::FileLocation;
-use crate::commands::game::{self, UnityFile};
 use crate::locate::locate_steam_game;
 
 const SCENE_INSTANCE_CLASS: &str = "UnityEngine.ResourceManagement.ResourceProviders.SceneInstance";
@@ -321,6 +321,153 @@ pub fn open_addressable<'a>(
     Ok((handle, FileLocation::Bundle { cab }, asset))
 }
 
+/// A serialized file or an addressables bundle to scan for `MonoScript`s.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum UnityFile {
+    SerializedFile(PathBuf),
+    Bundle(PathBuf),
+}
+
+impl UnityFile {
+    fn display(&self) -> String {
+        match self {
+            UnityFile::SerializedFile(path) | UnityFile::Bundle(path) => path.display().to_string(),
+        }
+    }
+}
+
+/// Every serialized file and addressables bundle in the game.
+fn all_unity_files(env: &Environment) -> Result<Vec<UnityFile>> {
+    let mut files: Vec<UnityFile> = env
+        .game_files
+        .serialized_files()?
+        .into_iter()
+        .map(UnityFile::SerializedFile)
+        .collect();
+    files.extend(
+        env.addressables_bundles()?
+            .into_iter()
+            .map(UnityFile::Bundle),
+    );
+    Ok(files)
+}
+
+/// `globalgamemanagers.assets` (the extension-less `globalgamemanagers` never
+/// has any).
+fn is_globalgamemanagers(file: &UnityFile) -> bool {
+    match file {
+        UnityFile::SerializedFile(path) => path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("globalgamemanagers.assets")),
+        UnityFile::Bundle(_) => false,
+    }
+}
+
+/// Whether `file` is where a Unity game's `MonoScript` definitions
+/// conventionally live: [`is_globalgamemanagers`] or a bundle named like
+/// `*_monoscripts.bundle`.
+fn is_likely_script_file(file: &UnityFile) -> bool {
+    is_globalgamemanagers(file)
+        || match file {
+            UnityFile::SerializedFile(_) => false,
+            UnityFile::Bundle(path) => path.file_name().is_some_and(|name| {
+                name.to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("monoscripts")
+            }),
+        }
+}
+
+/// The subset of [`all_unity_files`] passing [`is_likely_script_file`].
+fn likely_script_files(env: &Environment) -> Result<Vec<UnityFile>> {
+    Ok(all_unity_files(env)?
+        .into_iter()
+        .filter(is_likely_script_file)
+        .collect())
+}
+
+/// Scan `files` in parallel for `MonoScript` objects, grouped by `key_fn`
+/// (the namespace-qualified name, or the bare `m_Name`), each with its path id.
+fn scan_scripts(
+    env: &Environment,
+    files: Vec<UnityFile>,
+    key_fn: impl Fn(&MonoScript) -> String + Sync,
+) -> Result<BTreeMap<String, BTreeSet<(UnityFile, PathId)>>> {
+    par_fold_reduce::<BTreeMap<String, BTreeSet<(UnityFile, PathId)>>, _>(files, |acc, file| {
+        let handle = match &file {
+            UnityFile::SerializedFile(path) => env.load_serialized(path)?,
+            UnityFile::Bundle(bundle) => env.load_addressables_bundle_content(bundle)?,
+        };
+        for script in handle.objects_of::<MonoScript>() {
+            let path_id = script.path_id();
+            let script = script.read()?;
+            acc.entry(key_fn(&script))
+                .or_default()
+                .insert((file.clone(), path_id));
+        }
+        Ok(())
+    })
+}
+
+/// Each script (`Namespace.Class`) with the files / addressables whose
+/// `MonoScript` objects define it. Always scans the whole game, not the
+/// [`likely_script_files`] shortcut: an exhaustive listing can't silently miss
+/// anything.
+pub fn script_locations(env: &Environment) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    Ok(scan_scripts(env, all_unity_files(env)?, |script| {
+        script.full_name().into_owned()
+    })?
+    .into_iter()
+    .map(|(script, locations)| {
+        (
+            script,
+            locations
+                .into_iter()
+                .map(|(file, _)| file.display())
+                .collect(),
+        )
+    })
+    .collect())
+}
+
+/// Every `(file, path id)` where `name` (a `MonoScript`'s bare `m_Name`, not
+/// its namespace-qualified `full_name`) is defined. Checks
+/// [`is_likely_script_file`] first, falling back to a full-game scan (warning
+/// on stderr) only if that finds nothing — both draw from one
+/// [`all_unity_files`] call, so the fallback doesn't re-walk the game
+/// directory.
+fn scripts_by_name(env: &Environment, name: &str) -> Result<BTreeSet<(UnityFile, PathId)>> {
+    let all = all_unity_files(env)?;
+    let key_fn = |script: &MonoScript| script.m_Name.clone();
+
+    let fast_files = all
+        .iter()
+        .filter(|f| is_likely_script_file(f))
+        .cloned()
+        .collect();
+    let fast = scan_scripts(env, fast_files, key_fn)?;
+    if let Some(hits) = fast.get(name) {
+        return Ok(hits.clone());
+    }
+
+    eprintln!(
+        "warning: '{name}' isn't in the usual script locations (globalgamemanagers.assets, \
+         *monoscripts* bundles); scanning the whole game"
+    );
+    let all = scan_scripts(env, all, key_fn)?;
+    Ok(all.get(name).cloned().unwrap_or_default())
+}
+
+/// `MonoScript` names findable via [`likely_script_files`] alone: cheap
+/// enough to redo on every keystroke, unlike a full-game scan.
+pub fn script_names(env: &Environment) -> Result<Vec<String>> {
+    Ok(scan_scripts(env, likely_script_files(env)?, |script| {
+        script.m_Name.clone()
+    })?
+    .into_keys()
+    .collect())
+}
+
 /// Locate the file/bundle whose `MonoScript` has this bare `m_Name` and
 /// resolve it to a handle, the [`FileLocation`] for the shared file verbs, and
 /// its path id. Errors on zero or more than one match, naming `file <path>
@@ -329,31 +476,30 @@ pub fn locate_script<'a>(
     env: &'a Environment,
     name: &str,
 ) -> Result<(SerializedFileHandle<'a>, FileLocation, PathId)> {
-    let hits = game::scripts_by_name(env, name)?;
-    let (location, path_id) = match hits.len() {
-        0 => bail!("no script named '{name}' found in any file/bundle"),
-        1 => hits.into_iter().next().unwrap(),
-        2 if let Result::<[_; 1], _>::Ok(single_item) = hits
-            .iter()
-            .filter(|(file, _)| match file {
-                UnityFile::SerializedFile(path_buf) => path_buf != "globalgamemanagers.assets",
-                UnityFile::Bundle(_) => true,
-            })
-            .collect::<Vec<_>>()
-            .try_into() =>
-        {
-            single_item[0].clone()
-        }
-        n => {
-            bail!(
-                "script '{name}' is ambiguous ({n} matches): {}; open one directly with \
+    let hits = scripts_by_name(env, name)?;
+    if hits.is_empty() {
+        bail!("no script named '{name}' found in any file/bundle");
+    }
+    // `globalgamemanagers.assets` holds a copy of most scripts: a hit there
+    // is a duplicate and doesn't make an otherwise unique name ambiguous.
+    let unique: Vec<_> = hits
+        .iter()
+        .filter(|(file, _)| !is_globalgamemanagers(file))
+        .cloned()
+        .collect();
+    let (location, path_id) = match unique.as_slice() {
+        [hit] => hit.clone(),
+        // The only hit is a `globalgamemanagers.assets` one: still unique.
+        [] if hits.len() == 1 => hits.into_iter().next().unwrap(),
+        _ => bail!(
+            "script '{name}' is ambiguous ({} matches): {}; open one directly with \
              `file <path> object {name}` (or `bundle <path> file object {name}`)",
-                hits.iter()
-                    .map(|(file, _)| file.display())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+            hits.len(),
+            hits.iter()
+                .map(|(file, _)| file.display())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     };
 
     let (handle, file_location) = match &location {
