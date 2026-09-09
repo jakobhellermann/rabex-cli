@@ -7,17 +7,18 @@ pub mod output;
 pub mod qualify;
 pub mod resolve;
 pub mod commands {
+    pub mod addressable;
+    pub mod addressables;
     pub mod bundle;
     pub mod file;
+    pub mod files;
     pub mod game;
+    pub mod scenes;
 }
 
 use anyhow::Result;
 
-use crate::cli::{
-    AddressableInfoArgs, AddressableVerb, AddressablesVerb, Command, FileVerb, GameVerb,
-    ObjectArgs, ObjectVerb,
-};
+use crate::cli::{AddressablesVerb, Command, FileVerb, GameVerb, ObjectArgs};
 use crate::commands::file::FileLocation;
 use crate::component_path::ObjectRef;
 
@@ -48,16 +49,16 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         },
 
         // Collections (plural). Bare and `list` both list.
-        Command::Scenes(_) => commands::game::scenes(&ctx::require_game_env(game)?, format),
-        Command::Files(_) => commands::game::ls(&ctx::require_game_env(game)?, format),
+        Command::Scenes(_) => commands::scenes::scenes(&ctx::require_game_env(game)?, format),
+        Command::Files(_) => commands::files::ls(&ctx::require_game_env(game)?, format),
         Command::Bundles(_) => commands::bundle::list_all(&ctx::require_game_env(game)?, format),
         Command::Addressables(args) => {
             let env = ctx::require_game_env(game)?;
             match args.verb.unwrap_or(AddressablesVerb::List) {
                 AddressablesVerb::List => {
-                    commands::game::addressable_ls(&env, args.include_asset_bundles, format)
+                    commands::addressables::addressable_ls(&env, args.include_asset_bundles, format)
                 }
-                AddressablesVerb::Stats => commands::game::addressable_stats(&env, format),
+                AddressablesVerb::Stats => commands::addressables::addressable_stats(&env, format),
             }
         }
 
@@ -79,31 +80,7 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         }
         Command::Bundle(args) => commands::bundle::run(game, args, format),
         Command::Addressable(args) => {
-            let env = ctx::require_game_env(game)?;
-            let verb = args
-                .verb
-                .unwrap_or(AddressableVerb::Info(AddressableInfoArgs {
-                    dependencies: false,
-                }));
-            match verb {
-                AddressableVerb::Info(info) => {
-                    commands::game::addressable_info(&env, &args.key, info.dependencies, format)
-                }
-                // `cat` is sugar for descending into the bundle's main CAB and
-                // dumping the container's main asset by path id.
-                AddressableVerb::Cat => {
-                    let (handle, location, asset) = ctx::open_addressable(&env, &args.key)?;
-                    let verb = FileVerb::Object(ObjectArgs {
-                        reference: ObjectRef::PathId(asset),
-                        verb: Some(ObjectVerb::Cat(Default::default())),
-                    });
-                    commands::file::run_verb(location, &handle, Some(verb), format)
-                }
-                AddressableVerb::File(file) => {
-                    let (handle, location, _asset) = ctx::open_addressable(&env, &args.key)?;
-                    commands::file::run_verb(location, &handle, file.verb, format)
-                }
-            }
+            commands::addressable::run(&ctx::require_game_env(game)?, args, format)
         }
         Command::Script(args) => {
             let env = ctx::require_game_env(game)?;
