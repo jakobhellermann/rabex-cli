@@ -80,11 +80,21 @@ rabex addressable _GameCameras cat    # dump the object data
 `references` finds every object (across all files) that points at a target.
 
 ```sh
-rabex file globalgamemanagers object.assets PlayMakerFSM references # who references this object
-rabex file globalgamemanagers object.assets PlayMakerFSM references --files-with-matches
+rabex file globalgamemanagers.assets PlayMakerFSM references # who references this object
+rabex file globalgamemanagers.assets PlayMakerFSM references --files-with-matches
 rabex bundle .._monoscripts.bundle file object PlayMakerFSM references
 rabex bundle .._monoscripts.bundle file object PlayMakerFSM references --exclude scenes
 rabex bundle heroloading_assets_all.bundle file object Hero_Hornet@Transform references --exclude-type NailSlashTerrainThunk
+```
+
+## Finding scripts
+
+`script` finds `MonoScript` instances by looking in `globalgamemanagers.assets` and bundles matching `*monoscripts*`.
+Especially useful for finding instances of specific MonoBehaviours.
+
+```sh
+rabex script PlayMakerFSM references
+rabex script tk2dButton cat --jq '.m_AssemblyName'
 ```
 
 ## Autocomplete
