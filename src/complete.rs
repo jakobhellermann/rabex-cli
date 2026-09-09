@@ -468,14 +468,14 @@ pub fn addressable_keys() -> Result<Vec<CompletionCandidate>> {
         .collect())
 }
 
-/// Candidates for `script <name>`: every `MonoScript` `m_Name` found in
-/// `globalgamemanagers.assets` or a `*monoscripts*` bundle, cheap enough for a
-/// keystroke.
+/// Candidates for a `script <name>`: every `MonoScript` `m_Name` findable in
+/// the usual script locations, cheap enough for a keystroke (see
+/// [`ctx::script_names`]).
 pub fn script_names() -> Result<Vec<CompletionCandidate>> {
     let Some(env) = current_game_env()? else {
         return Ok(Vec::new());
     };
-    Ok(crate::commands::game::script_name_completions(&env)?
+    Ok(ctx::script_names(&env)?
         .into_iter()
         .map(CompletionCandidate::new)
         .collect())
