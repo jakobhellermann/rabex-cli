@@ -755,6 +755,40 @@ fn bundle_info_lists_entries() {
         .stdout(predicates::str::contains(BUNDLE_CAB));
 }
 
+/// `bundle <path> info` reports the container header and storage blocks.
+#[test]
+fn bundle_info_reports_header_and_blocks() {
+    let (_tmp, path, _) = standalone_bundle(&["Player"]);
+
+    let assert = rabex()
+        .args(["--format", "json", "bundle"])
+        .arg(&path)
+        .arg("info")
+        .assert()
+        .success();
+
+    let value = stdout_json(&assert);
+    assert_eq!(
+        value["header"],
+        serde_json::json!({
+            "signature": "UnityFS",
+            "version": 7,
+            "unity_version": "5.x.x",
+            "unity_revision": "6000.0.0f1",
+            "size": 1924,
+        })
+    );
+    assert_eq!(
+        value["blocks"],
+        serde_json::json!([{
+            "compressed_size": 1812,
+            "uncompressed_size": 1812,
+            "compression": "none",
+            "flags": 64,
+        }])
+    );
+}
+
 /// `bundle <path> file <cab> objects` lists the objects in a contained file.
 #[test]
 fn bundle_file_objects_lists_objects() {

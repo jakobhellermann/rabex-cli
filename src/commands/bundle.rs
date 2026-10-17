@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use rabex_env::Environment;
 use rabex_env::env::Data;
-use rabex_env::rabex::files::bundlefile::BundleFileReader;
+use rabex_env::rabex::files::bundlefile::{BundleFileReader, CompressionType};
 use rabex_env::rabex::files::unityfile::FileEntry;
 use serde::Serialize;
 
@@ -21,7 +21,7 @@ pub fn run(game: &Context, args: BundleArgs, format: Format) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match args.verb.unwrap_or(BundleVerb::Info) {
-        BundleVerb::Info => emit(&info(&bundle), format, &mut out),
+        BundleVerb::Info => emit(&info(&bundle)?, format, &mut out),
         BundleVerb::Files => emit(&list_files(&bundle), format, &mut out),
         BundleVerb::File(file_args) => {
             // Default to the bundle's main serialized file when no CAB is given.
@@ -88,14 +88,76 @@ pub struct BundleEntry {
     path: String,
 }
 
-/// The bundle's contained files with sizes and kinds.
+/// The bundle container header.
+#[derive(Serialize)]
+pub struct BundleHeader {
+    signature: String,
+    version: u32,
+    unity_version: String,
+    /// `None` when the bundle was built with a stripped version (`0.0.0`).
+    unity_revision: Option<String>,
+    size: u32,
+}
+
+/// One storage block of the bundle's data stream.
+#[derive(Serialize)]
+pub struct BundleBlock {
+    compressed_size: u32,
+    uncompressed_size: u32,
+    compression: &'static str,
+    flags: u32,
+}
+
+/// The bundle's header, storage blocks and contained files with sizes and kinds.
 #[derive(Serialize)]
 pub struct BundleInfo {
+    header: BundleHeader,
+    blocks: Vec<BundleBlock>,
     files: Vec<BundleEntry>,
 }
 
 impl Render for BundleInfo {
     fn render(&self, out: &mut dyn Write) -> Result<()> {
+        let header = &self.header;
+        writeln!(
+            out,
+            "{} v{}  unity {}  revision {}  {} bytes",
+            style::header(&header.signature),
+            header.version,
+            header.unity_version,
+            header
+                .unity_revision
+                .as_deref()
+                .unwrap_or("0.0.0 (stripped)"),
+            header.size,
+        )?;
+
+        let compressed: u64 = self.blocks.iter().map(|b| b.compressed_size as u64).sum();
+        let uncompressed: u64 = self.blocks.iter().map(|b| b.uncompressed_size as u64).sum();
+
+        let mut by_compression: Vec<(&str, usize)> = Vec::new();
+        for block in &self.blocks {
+            match by_compression
+                .iter_mut()
+                .find(|(c, _)| *c == block.compression)
+            {
+                Some((_, n)) => *n += 1,
+                None => by_compression.push((block.compression, 1)),
+            }
+        }
+
+        let by_compression = by_compression
+            .iter()
+            .map(|(c, n)| format!("{n} {c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "{} {}  {compressed} -> {uncompressed} bytes",
+            style::header(&format!("blocks ({})", self.blocks.len())),
+            by_compression,
+        )?;
+
         writeln!(
             out,
             "{}",
@@ -114,8 +176,39 @@ impl Render for BundleInfo {
     }
 }
 
-/// Build the bundle's contained files with sizes and kinds.
-fn info(bundle: &BundleFileReader<Cursor<Data>>) -> BundleInfo {
+fn compression_name(flags: u32) -> Result<&'static str> {
+    Ok(match CompressionType::try_from(flags & 0x3F) {
+        Ok(CompressionType::None) => "none",
+        Ok(CompressionType::Lzma) => "lzma",
+        Ok(CompressionType::Lz4) => "lz4",
+        Ok(CompressionType::Lz4hc) => "lz4hc",
+        Ok(CompressionType::Lzham) => "lzham",
+        _ => anyhow::bail!("unknown block compression in flags {flags:#x}"),
+    })
+}
+
+/// Build the bundle's header, blocks and contained files with sizes and kinds.
+fn info(bundle: &BundleFileReader<Cursor<Data>>) -> Result<BundleInfo> {
+    let header = bundle.header();
+    let header = BundleHeader {
+        signature: header.signature.to_string(),
+        version: header.version,
+        unity_version: header.unity_version.clone(),
+        unity_revision: header.unity_revision.as_ref().map(ToString::to_string),
+        size: header.size,
+    };
+    let blocks = bundle
+        .blocks()
+        .iter()
+        .map(|block| {
+            Ok(BundleBlock {
+                compressed_size: block.compressed_size,
+                uncompressed_size: block.uncompressed_size,
+                compression: compression_name(block.flags)?,
+                flags: block.flags,
+            })
+        })
+        .collect::<Result<_>>()?;
     let files = bundle
         .files()
         .iter()
@@ -129,5 +222,9 @@ fn info(bundle: &BundleFileReader<Cursor<Data>>) -> BundleInfo {
             path: entry.path.clone(),
         })
         .collect();
-    BundleInfo { files }
+    Ok(BundleInfo {
+        header,
+        blocks,
+        files,
+    })
 }
