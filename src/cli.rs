@@ -192,6 +192,7 @@ pub struct BundleArgs {
     pub verb: Option<BundleVerb>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum BundleVerb {
     /// Show the bundle's contained files with sizes.
@@ -221,6 +222,7 @@ pub struct AddressableArgs {
     pub verb: Option<AddressableVerb>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum AddressableVerb {
     /// Catalog location(s), bundle and dependency count (the default).
