@@ -59,6 +59,14 @@ pub struct Context {
     /// Path to a unity game directory (its parent or the `*_Data` dir).
     #[arg(long, global = true, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub game_dir: Option<PathBuf>,
+
+    /// Unity version for bundles that omit it, when opened outside a game
+    #[arg(long, global = true, value_name = "VERSION", value_parser = parse_unity_version)]
+    pub unity_version: Option<UnityVersion>,
+}
+
+fn parse_unity_version(input: &str) -> Result<UnityVersion, String> {
+    input.parse().map_err(|e| format!("{e:?}"))
 }
 
 #[derive(Subcommand)]

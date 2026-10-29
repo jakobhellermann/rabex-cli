@@ -12,6 +12,7 @@ use rabex_env::addressables::AddressablesData;
 use rabex_env::addressables::catalog::{AddressablesCatalog, ResourceLocation, resource_providers};
 use rabex_env::env::Data;
 use rabex_env::handle::SerializedFileHandle;
+use rabex_env::rabex::UnityVersion;
 use rabex_env::rabex::files::bundlefile::{BundleFileReader, BundleSignature, ExtractionConfig};
 use rabex_env::rabex::files::serializedfile::SerializedFile;
 use rabex_env::rabex::objects::pptr::PathId;
@@ -145,7 +146,7 @@ pub fn open_bundle(
         }
         None => {
             let (env, relative) = standalone(path)?;
-            let reader = raw_bundle_reader(&env, &relative)?;
+            let reader = raw_bundle_reader(&env, &relative, game.unity_version.as_ref())?;
             Ok((env, reader))
         }
     }
@@ -153,19 +154,30 @@ pub fn open_bundle(
 
 /// Read a raw bundle at `relative` directly through the resolver (rather than
 /// joining the addressables build folder), for standalone bundles.
-fn raw_bundle_reader(env: &Environment, relative: &Path) -> Result<BundleFileReader<Cursor<Data>>> {
+fn raw_bundle_reader(
+    env: &Environment,
+    relative: &Path,
+    unity_version: Option<&UnityVersion>,
+) -> Result<BundleFileReader<Cursor<Data>>> {
     let data = env
         .game_files
         .read_path(relative)
         .with_context(|| format!("read bundle {}", relative.display()))?;
 
-    // Bundles often omit their unity version; supply the game's if we have one.
+    // Bundles often omit their unity version; supply `--unity-version` or the game's.
     let mut config = ExtractionConfig::default();
-    if let Ok(version) = env.unity_version() {
+    let fallback = unity_version.or(env.unity_version().ok());
+    if let Some(version) = fallback {
         config = config.with_fallback_unity_version(version.clone());
     }
-    BundleFileReader::from_reader(Cursor::new(data), &config)
-        .with_context(|| format!("open bundle {}", relative.display()))
+    BundleFileReader::from_reader(Cursor::new(data), &config).with_context(|| {
+        let hint = if fallback.is_none() {
+            " (pass --unity-version if it omits its version)"
+        } else {
+            ""
+        };
+        format!("open bundle {}{hint}", relative.display())
+    })
 }
 
 /// Load a serialized file out of an open bundle into a handle. `cab` selects a
@@ -189,7 +201,11 @@ pub fn bundle_serialized<'a>(
         .read_at(&entry.path)?
         .context("missing bundle entry")?;
     let mut reader = Cursor::new(content.as_slice());
-    let file = match env.unity_version().ok() {
+    let version = env
+        .unity_version()
+        .ok()
+        .or(bundle.header().unity_revision.as_ref());
+    let file = match version {
         Some(version) => {
             let mut file = SerializedFile::from_reader_with_version(&mut reader, version)?;
             file.m_UnityVersion.get_or_insert(version.clone());

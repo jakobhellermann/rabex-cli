@@ -12,6 +12,7 @@ use clap::{ArgMatches, CommandFactory as _};
 use clap_complete::CompletionCandidate;
 use rabex_env::Environment;
 use rabex_env::handle::SerializedFileHandle;
+use rabex_env::rabex::UnityVersion;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
 use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::{EnvResolver as _, GameFiles};
@@ -45,6 +46,7 @@ fn game_args(matches: &ArgMatches) -> Context {
     Context {
         steam_game: matches.get_one::<String>("steam_game").cloned(),
         game_dir: matches.get_one::<PathBuf>("game_dir").cloned(),
+        unity_version: matches.get_one::<UnityVersion>("unity_version").cloned(),
     }
 }
 
