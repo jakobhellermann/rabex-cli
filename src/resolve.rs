@@ -37,6 +37,27 @@ pub(crate) fn component_class_and_label<R: EnvResolver, P: TypeTreeProvider>(
     Ok((class_id, format!("{class_id:?}")))
 }
 
+/// An object's name
+/// - `m_Name` by default
+/// - `m_ParsedForm.name` fo rshaders
+/// - None for unnamed/unreadable objects
+pub(crate) fn object_name<R: EnvResolver, P: TypeTreeProvider>(
+    file: &SerializedFileHandle<'_, R, P>,
+    path_id: PathId,
+) -> Option<String> {
+    let value = file
+        .object_at::<serde_json::Value>(path_id)
+        .and_then(|o| o.read())
+        .ok()?;
+    let name = |v: &serde_json::Value| {
+        v.get("m_Name")
+            .and_then(|n| n.as_str())
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+    };
+    name(&value).or_else(|| value.get("m_ParsedForm").and_then(name))
+}
+
 /// Resolve an object reference (raw path id or component path) to a path id.
 pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
@@ -59,7 +80,7 @@ pub fn resolve_object_ref<R: EnvResolver, P: TypeTreeProvider>(
     }
 }
 
-/// Resolve a single object by its `m_Name`, or — when nothing is named that —
+/// Resolve a single object by its name (see [`object_name`]), or — when nothing is named that —
 /// by its class name (for class-typed singletons like `TagManager`). Scans every
 /// object in the file; `field.index` disambiguates when several match.
 fn resolve_object_by_name<R: EnvResolver, P: TypeTreeProvider>(
@@ -73,14 +94,7 @@ fn resolve_object_by_name<R: EnvResolver, P: TypeTreeProvider>(
         if format!("{:?}", obj.class_id()) == field.name {
             by_class.push(path_id);
         }
-        // Reading the name deserializes the object; tolerate failures (e.g. a
-        // MonoBehaviour whose script typetree isn't available) by skipping it.
-        let name = file
-            .object_at::<serde_json::Value>(path_id)
-            .and_then(|o| o.read())
-            .ok()
-            .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned));
-        if name.as_deref() == Some(field.name.as_str()) {
+        if object_name(file, path_id).as_deref() == Some(field.name.as_str()) {
             by_name.push(path_id);
         }
     }

@@ -20,7 +20,8 @@ use crate::cli::{CatArgs, FileVerb, Format, InfoArgs, ObjectVerb};
 use crate::component_path::ComponentPath;
 use crate::output::{Render, emit, style};
 use crate::resolve::{
-    component_class_and_label, component_label, resolve_component_path, resolve_object_ref,
+    component_class_and_label, component_label, object_name, resolve_component_path,
+    resolve_object_ref,
 };
 
 mod preloads;
@@ -314,15 +315,7 @@ pub fn list<R: EnvResolver, P: TypeTreeProvider>(
             continue;
         }
 
-        let name = names.then(|| {
-            // Reading the name means deserializing the object; tolerate failures (e.g. a
-            // MonoBehaviour whose script typetree isn't available) by leaving it blank.
-            file.object_at::<serde_json::Value>(path_id)
-                .and_then(|o| o.read())
-                .ok()
-                .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
-                .unwrap_or_default()
-        });
+        let name = names.then(|| object_name(file, path_id).unwrap_or_default());
         objects.push(ObjectEntry {
             path_id,
             class,
@@ -530,12 +523,7 @@ pub fn object_info<R: EnvResolver, P: TypeTreeProvider>(
     let (class_id, label) = component_class_and_label(file, PPtr::local(path_id))?;
     let class = format!("{class_id:?}");
     let script = (label != class).then_some(label);
-    let name = file
-        .object_at::<serde_json::Value>(path_id)
-        .and_then(|o| o.read())
-        .ok()
-        .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
-        .filter(|name| !name.is_empty());
+    let name = object_name(file, path_id);
     Ok(ObjectInfo {
         path_id,
         class,

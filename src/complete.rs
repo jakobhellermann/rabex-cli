@@ -19,7 +19,7 @@ use rabex_env::resolver::{EnvResolver as _, GameFiles};
 use crate::cli::{Cli, Context};
 use crate::commands::file::FileLocation;
 use crate::component_path::ObjectRef;
-use crate::resolve::resolve_object_ref;
+use crate::resolve::{object_name, resolve_object_ref};
 use crate::{ctx, qualify};
 
 /// The concrete handle type the completion helpers operate on.
@@ -164,14 +164,8 @@ pub fn object_refs() -> Result<Vec<CompletionCandidate>> {
             if seen.insert(class.clone()) {
                 candidates.push(CompletionCandidate::new(class.clone()).help(Some("class".into())));
             }
-            // Selectable by `m_Name` (e.g. a `MonoScript`'s class name).
-            let name = handle
-                .object_at::<serde_json::Value>(obj.path_id())
-                .and_then(|o| o.read())
-                .ok()
-                .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
-                .filter(|name| !name.is_empty());
-            if let Some(name) = name
+            // Selectable by name (e.g. a `MonoScript`'s class name).
+            if let Some(name) = object_name(handle, obj.path_id())
                 && seen.insert(name.clone())
             {
                 candidates.push(CompletionCandidate::new(name).help(Some(class.into())));
