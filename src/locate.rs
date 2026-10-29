@@ -6,7 +6,11 @@ use anyhow::{Context, Result};
 use rabex_env::resolver::GameFiles;
 
 fn search_transform(input: &str) -> String {
-    input.to_ascii_lowercase().replace(char::is_whitespace, "")
+    input
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Locate a steam-installed unity game by name (fuzzy) or numeric app id,
@@ -46,4 +50,21 @@ pub fn locate_steam_game(game: &str) -> Result<PathBuf> {
     GameFiles::probe_dir(&install_dir)
         .with_context(|| format!("'{name}' is not a unity game at {}", install_dir.display()))?;
     Ok(install_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_transform;
+
+    #[test]
+    fn ignores_punctuation_and_case() {
+        assert_eq!(
+            search_transform("Hollow Knight: Silksong"),
+            "hollowknightsilksong"
+        );
+        assert_eq!(
+            search_transform("Hollow Knight Silksong"),
+            "hollowknightsilksong"
+        );
+    }
 }
