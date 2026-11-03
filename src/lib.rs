@@ -2,6 +2,7 @@ pub mod cli;
 pub mod complete;
 pub mod component_path;
 pub mod ctx;
+pub mod json;
 pub mod locate;
 pub mod output;
 pub mod qualify;

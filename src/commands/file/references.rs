@@ -427,8 +427,9 @@ fn object_name<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
 ) -> Option<String> {
-    file.object_at::<serde_json::Value>(path_id)
+    file.object_at::<serde_value::Value>(path_id)
         .and_then(|o| o.read())
+        .map(crate::json::to_json)
         .ok()
         .and_then(|v| v.get("m_Name").and_then(|n| n.as_str()).map(str::to_owned))
         .filter(|name| !name.is_empty())
@@ -460,8 +461,9 @@ fn referrer_label<R: EnvResolver, P: TypeTreeProvider>(
     };
 
     let value = file
-        .object_at::<serde_json::Value>(path_id)
+        .object_at::<serde_value::Value>(path_id)
         .and_then(|o| o.read())
+        .map(crate::json::to_json)
         .ok();
     // A component carries the GameObject it sits on; prefer that over its own name.
     let go_name = value

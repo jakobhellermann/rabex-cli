@@ -333,8 +333,8 @@ pub fn dump_path_id<R: EnvResolver, P: TypeTreeProvider>(
     file: &SerializedFileHandle<'_, R, P>,
     path_id: PathId,
 ) -> Result<serde_json::Value> {
-    let object = file.object_at::<serde_json::Value>(path_id)?;
-    let mut value = object.read()?;
+    let object = file.object_at::<serde_value::Value>(path_id)?;
+    let mut value = crate::json::to_json(object.read()?);
     crate::qualify::qualify(file, &mut value);
     Ok(value)
 }

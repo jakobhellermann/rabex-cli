@@ -46,8 +46,9 @@ pub(crate) fn object_name<R: EnvResolver, P: TypeTreeProvider>(
     path_id: PathId,
 ) -> Option<String> {
     let value = file
-        .object_at::<serde_json::Value>(path_id)
+        .object_at::<serde_value::Value>(path_id)
         .and_then(|o| o.read())
+        .map(crate::json::to_json)
         .ok()?;
     let name = |v: &serde_json::Value| {
         v.get("m_Name")
