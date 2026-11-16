@@ -188,10 +188,15 @@ pub fn bundle_serialized<'a>(
     let content = bundle
         .read_at(&entry.path)?
         .context("missing bundle entry")?;
-    let mut file = SerializedFile::from_reader(&mut Cursor::new(content.as_slice()))?;
-    if let Ok(version) = env.unity_version() {
-        file.m_UnityVersion.get_or_insert(version.clone());
-    }
+    let mut reader = Cursor::new(content.as_slice());
+    let file = match env.unity_version().ok() {
+        Some(version) => {
+            let mut file = SerializedFile::from_reader_with_version(&mut reader, version)?;
+            file.m_UnityVersion.get_or_insert(version.clone());
+            file
+        }
+        None => SerializedFile::from_reader(&mut reader)?,
+    };
     Ok(env.insert_cache(entry.path.clone().into(), file, Data::InMemory(content)))
 }
 

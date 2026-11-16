@@ -597,7 +597,10 @@ mod find_references {
                 let bundle = env.load_addressables_bundle(&bundle_path)?;
                 for entry in bundle.serialized_files() {
                     let data = bundle.read_at_entry(entry)?;
-                    let file = SerializedFile::from_reader(&mut Cursor::new(data.as_slice()))?;
+                    let file = SerializedFile::from_reader_with_version(
+                        &mut Cursor::new(data.as_slice()),
+                        env.unity_version()?,
+                    )?;
                     if file.externals_paths().any(|external| external == to) {
                         acc.push(bundle_path.clone());
                         break;
@@ -689,7 +692,10 @@ mod find_references {
                 for entry in bundle.serialized_files() {
                     let name = ArchivePath::new(&bundle_id, &entry.path).to_string();
                     let data = bundle.read_at_entry(entry)?;
-                    let file = SerializedFile::from_reader(&mut Cursor::new(data.as_slice()))?;
+                    let file = SerializedFile::from_reader_with_version(
+                        &mut Cursor::new(data.as_slice()),
+                        env.unity_version()?,
+                    )?;
                     if name != target_file && !file.externals_paths().any(|e| e == target_file) {
                         continue;
                     }
