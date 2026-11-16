@@ -53,15 +53,22 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         Command::Scenes(_) => commands::scenes::scenes(&ctx::require_game_env(game)?, format),
         Command::Files(_) => commands::files::ls(&ctx::require_game_env(game)?, format),
         Command::Bundles(_) => commands::bundle::list_all(&ctx::require_game_env(game)?, format),
-        Command::Addressables(args) => {
-            let env = ctx::require_game_env(game)?;
-            match args.verb.unwrap_or(AddressablesVerb::List) {
-                AddressablesVerb::List => {
-                    commands::addressables::addressable_ls(&env, args.include_asset_bundles, format)
-                }
-                AddressablesVerb::Stats => commands::addressables::addressable_stats(&env, format),
+        Command::Addressables(args) => match args.verb.unwrap_or(AddressablesVerb::List) {
+            AddressablesVerb::List => commands::addressables::addressable_ls(
+                &ctx::require_game_env(game)?,
+                args.include_asset_bundles,
+                format,
+            ),
+            AddressablesVerb::Stats => {
+                commands::addressables::addressable_stats(&ctx::require_game_env(game)?, format)
             }
-        }
+            AddressablesVerb::Catalog(args) => match args.file {
+                Some(file) => commands::addressables::catalog_file(&file, format),
+                None => {
+                    commands::addressables::game_catalogs(&ctx::require_game_env(game)?, format)
+                }
+            },
+        },
 
         // Items (singular): select then run a verb.
         Command::Scene(args) => {

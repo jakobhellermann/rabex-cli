@@ -1,10 +1,13 @@
-//! The `addressables` commands: the key listing (`list`) and the catalog
-//! overview (`stats`). The key data comes from [`crate::ctx::addressable_keys`].
+//! The `addressables` commands: the key listing (`list`), the catalog
+//! overview (`stats`) and the raw catalog contents (`catalog`). The key data
+//! comes from [`crate::ctx::addressable_keys`].
 
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
 use rabex_env::Environment;
+use rabex_env::addressables::catalog::{self, AddressablesCatalog, ObjectInitializationData};
 use serde::Serialize;
 
 use crate::cli::Format;
@@ -145,4 +148,175 @@ pub fn addressable_ls(
         .collect();
     let stdout = std::io::stdout();
     emit(&AddressableKeys(keys), format, &mut stdout.lock())
+}
+
+/// A catalog's providers, locations and keys.
+#[derive(Serialize)]
+pub struct CatalogDump {
+    locator_id: String,
+    build_result_hash: Option<String>,
+    instance_provider: String,
+    scene_provider: String,
+    resource_providers: Vec<String>,
+    locations: Vec<CatalogLocation>,
+    keys: Vec<CatalogKeyEntry>,
+}
+
+#[derive(Serialize)]
+struct CatalogLocation {
+    index: usize,
+    provider: String,
+    #[serde(rename = "type")]
+    type_: String,
+    primary_key: String,
+    internal_id: String,
+    bundle_name: Option<String>,
+    bundle_size: Option<u32>,
+    dependencies: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct CatalogKeyEntry {
+    key: String,
+    locations: Vec<usize>,
+}
+
+impl CatalogDump {
+    fn new(catalog: &AddressablesCatalog) -> Self {
+        let provider = |data: &ObjectInitializationData| data.id.to_string();
+        CatalogDump {
+            locator_id: catalog.locator_id.to_string(),
+            build_result_hash: catalog
+                .build_result_hash
+                .as_ref()
+                .map(|hash| hash.to_string()),
+            instance_provider: provider(&catalog.instance_provider_data),
+            scene_provider: provider(&catalog.scene_provider_data),
+            resource_providers: catalog
+                .resource_provider_data
+                .iter()
+                .map(provider)
+                .collect(),
+            locations: catalog
+                .locations()
+                .enumerate()
+                .map(|(index, loc)| CatalogLocation {
+                    index,
+                    provider: loc.provider_name().to_owned(),
+                    type_: loc.type_.class_name().to_owned(),
+                    primary_key: loc.primary_key.to_string(),
+                    internal_id: loc.internal_id.to_string(),
+                    bundle_name: loc.abro().map(|abro| abro.bundle_name.to_string()),
+                    bundle_size: loc.abro().map(|abro| abro.bundle_size),
+                    dependencies: loc.dependencies.clone(),
+                })
+                .collect(),
+            keys: catalog
+                .resources
+                .iter()
+                .map(|(key, locations)| CatalogKeyEntry {
+                    key: key.as_str().to_owned(),
+                    locations: locations.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Render for CatalogDump {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        writeln!(out, "{}", style::header(&self.locator_id))?;
+        if let Some(hash) = &self.build_result_hash {
+            writeln!(out, "  build hash: {hash}")?;
+        }
+        writeln!(
+            out,
+            "  instance:   {}",
+            style::class(&self.instance_provider)
+        )?;
+        writeln!(out, "  scene:      {}", style::class(&self.scene_provider))?;
+        writeln!(out, "  providers:")?;
+        for provider in &self.resource_providers {
+            writeln!(out, "    {}", style::class(provider))?;
+        }
+
+        writeln!(out)?;
+        writeln!(out, "  locations ({}):", self.locations.len())?;
+        for loc in &self.locations {
+            write!(
+                out,
+                "    {} {} {} {}",
+                style::dim(&format!("#{:<5}", loc.index)),
+                style::class(&format!("{}<{}>", loc.provider, loc.type_)),
+                style::name(&loc.primary_key),
+                loc.internal_id,
+            )?;
+            if let (Some(name), Some(size)) = (&loc.bundle_name, loc.bundle_size) {
+                write!(
+                    out,
+                    " {}",
+                    style::dim(&format!("bundle={name} size={size}"))
+                )?;
+            }
+            if !loc.dependencies.is_empty() {
+                write!(
+                    out,
+                    " {}",
+                    style::dim(&format!("deps={}", loc.dependencies.len()))
+                )?;
+            }
+            writeln!(out)?;
+        }
+
+        writeln!(out)?;
+        writeln!(out, "  keys ({}):", self.keys.len())?;
+        for key in &self.keys {
+            let locations: Vec<String> = key.locations.iter().map(|i| format!("#{i}")).collect();
+            writeln!(
+                out,
+                "    {} {}",
+                style::name(&key.key),
+                style::dim(&locations.join(" "))
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Dump a catalog file.
+pub fn catalog_file(path: &Path, format: Format) -> Result<()> {
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let catalog = catalog::parse(&data).with_context(|| format!("parsing {}", path.display()))?;
+    let stdout = std::io::stdout();
+    emit(&CatalogDump::new(&catalog), format, &mut stdout.lock())
+}
+
+/// Dump every catalog of the game.
+pub fn game_catalogs(env: &Environment, format: Format) -> Result<()> {
+    let addressables = env
+        .addressables()?
+        .context("this game has no addressables")?;
+    let dumps: Vec<CatalogDump> = addressables
+        .catalogs(&env.game_files)?
+        .iter()
+        .map(CatalogDump::new)
+        .collect();
+    let stdout = std::io::stdout();
+    emit(&CatalogDumps(dumps), format, &mut stdout.lock())
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct CatalogDumps(Vec<CatalogDump>);
+
+impl Render for CatalogDumps {
+    fn render(&self, out: &mut dyn Write) -> Result<()> {
+        for (i, dump) in self.0.iter().enumerate() {
+            if i > 0 {
+                writeln!(out)?;
+            }
+            dump.render(out)?;
+        }
+        Ok(())
+    }
 }

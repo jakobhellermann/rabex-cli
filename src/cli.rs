@@ -163,6 +163,15 @@ pub enum AddressablesVerb {
     List,
     /// Catalog overview: counts and breakdowns by provider/type.
     Stats,
+    /// Every location and key of a catalog file, or of the game's catalogs.
+    Catalog(CatalogArgs),
+}
+
+#[derive(Args)]
+pub struct CatalogArgs {
+    /// `catalog.bin` or `catalog.json`.
+    #[arg(value_name = "FILE")]
+    pub file: Option<PathBuf>,
 }
 
 // -----------------------------------------------------------------------------
