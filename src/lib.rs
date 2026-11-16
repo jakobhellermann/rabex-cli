@@ -10,6 +10,7 @@ pub mod resolve;
 pub mod commands {
     pub mod addressable;
     pub mod addressables;
+    pub mod assembly;
     pub mod bundle;
     pub mod file;
     pub mod files;
@@ -18,11 +19,17 @@ pub mod commands {
     pub mod tpk;
 }
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use rabex_env::unity::types::MonoScript;
 
-use crate::cli::{AddressablesVerb, Command, FileVerb, GameVerb, ObjectArgs};
+use crate::cli::{
+    AddressablesVerb, AssemblyVerb, ClassVerb, ClassesArgs, Command, FileVerb, GameVerb,
+    ObjectArgs, ObjectVerb, ScriptVerb,
+};
+use crate::commands::assembly;
 use crate::commands::file::FileLocation;
 use crate::component_path::ObjectRef;
+use crate::output::emit;
 
 /// Run a parsed CLI. The binary's `main` is a thin wrapper around this.
 pub fn run(cli: crate::cli::Cli) -> Result<()> {
@@ -94,11 +101,54 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         Command::Script(args) => {
             let env = ctx::require_game_env(game)?;
             let (handle, location, path_id) = ctx::locate_script(&env, &args.name)?;
+            let object_verb = match args.verb.unwrap_or(ScriptVerb::Info) {
+                ScriptVerb::Info => ObjectVerb::Info,
+                ScriptVerb::Cat(args) => ObjectVerb::Cat(args),
+                ScriptVerb::References(args) => ObjectVerb::References(args),
+                ScriptVerb::Decompile => {
+                    let script = handle
+                        .objects_of::<MonoScript>()
+                        .find(|script| script.path_id() == path_id)
+                        .with_context(|| format!("no MonoScript #{path_id}"))?
+                        .read()?;
+                    let path = assembly::resolve_assembly(&env, &script.m_AssemblyName)?;
+                    let class = assembly::resolve_class(&path, &script.full_name())?;
+                    let decompiled =
+                        assembly::decompile(&assembly::managed_dir(&env)?, &path, &class)?;
+                    return emit(&decompiled, format, &mut std::io::stdout().lock());
+                }
+            };
             let verb = FileVerb::Object(ObjectArgs {
                 reference: ObjectRef::PathId(path_id),
-                verb: args.verb,
+                verb: Some(object_verb),
             });
             commands::file::run_verb(location, &handle, Some(verb), format)
+        }
+        Command::Assemblies(_) => assembly::run_assemblies(&ctx::require_game_env(game)?, format),
+        Command::Assembly(args) => {
+            let env = ctx::require_game_env(game)?;
+            let path = assembly::resolve_assembly(&env, &args.name)?;
+            let mut out = std::io::stdout().lock();
+            match args
+                .verb
+                .unwrap_or(AssemblyVerb::Classes(ClassesArgs::default()))
+            {
+                AssemblyVerb::Classes(args) => emit(
+                    &assembly::list_classes(&path, args.filter.as_deref())?,
+                    format,
+                    &mut out,
+                ),
+                AssemblyVerb::Class(args) => {
+                    let class = assembly::resolve_class(&path, &args.name)?;
+                    match args.verb.unwrap_or(ClassVerb::Decompile) {
+                        ClassVerb::Decompile => emit(
+                            &assembly::decompile(&assembly::managed_dir(&env)?, &path, &class)?,
+                            format,
+                            &mut out,
+                        ),
+                    }
+                }
+            }
         }
         Command::Tpk(args) => commands::tpk::run(args, format),
     }

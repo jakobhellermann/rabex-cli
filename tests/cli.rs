@@ -1127,6 +1127,201 @@ fn tpk_class_unknown_name_fails() {
         .stderr("Error: the TPK has no class 'Nope'\n");
 }
 
+// -----------------------------------------------------------------------------
+// assemblies / assembly <name> / script <name> decompile
+// -----------------------------------------------------------------------------
+
+/// A game whose `Managed/Assembly-CSharp.dll` defines `Game.Hero`, a `Game.State` struct,
+/// `Game.IDamageable`, a top-level `Helper`, and `Other.Hero`.
+// TODO: nest State in Hero once dotnetdll writes the enclosing type index 1-based
+fn game_with_assembly() -> (TempDir, PathBuf) {
+    use dotnetdll::prelude::*;
+    use dotnetdll::resolved::types::{Kind, ResolutionScope, UserType};
+
+    let mut res = Resolution::new(Module::new("Assembly-CSharp.dll"));
+    let mut assembly = Assembly::new("Assembly-CSharp");
+    assembly.version = dotnetdll::resolved::assembly::Version {
+        major: 1,
+        minor: 2,
+        build: 3,
+        revision: 4,
+    };
+    res.assembly = Some(assembly);
+    let mscorlib = res.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+    let value_type = res.push_type_reference(ExternalTypeReference::new(
+        Some("System".into()),
+        "ValueType",
+        ResolutionScope::Assembly(mscorlib),
+    ));
+
+    res.push_type_definition(TypeDefinition::new(Some("Game".into()), "Hero"));
+    let mut state = TypeDefinition::new(Some("Game".into()), "State");
+    state.set_extends(TypeSource::User(UserType::Reference(value_type)));
+    res.push_type_definition(state);
+    let mut damageable = TypeDefinition::new(Some("Game".into()), "IDamageable");
+    damageable.flags.kind = Kind::Interface;
+    res.push_type_definition(damageable);
+    res.push_type_definition(TypeDefinition::new(None, "Helper"));
+    res.push_type_definition(TypeDefinition::new(Some("Other".into()), "Hero"));
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("Game_Data");
+    std::fs::create_dir_all(data_dir.join("Managed")).unwrap();
+    let bytes = res.write(WriteOptions::default()).unwrap();
+    std::fs::write(data_dir.join("Managed/Assembly-CSharp.dll"), bytes).unwrap();
+    (tmp, data_dir)
+}
+
+#[test]
+fn assemblies_lists_names_and_versions() {
+    let (_tmp, data_dir) = game_with_assembly();
+    let assert = rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["--format", "json", "assemblies"])
+        .assert()
+        .success();
+    let json = stdout_json(&assert);
+    let assemblies: Vec<_> = json["assemblies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["name"].as_str().unwrap(), a["version"].as_str().unwrap()))
+        .collect();
+    assert_eq!(assemblies, vec![("Assembly-CSharp", "1.2.3.4")]);
+}
+
+#[test]
+fn assembly_classes_lists_types_with_kinds() {
+    let (_tmp, data_dir) = game_with_assembly();
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["assembly", "Assembly-CSharp", "classes"])
+        .assert()
+        .success()
+        .stdout(
+            "class      Game.Hero\n\
+             struct     Game.State\n\
+             interface  Game.IDamageable\n\
+             class      Helper\n\
+             class      Other.Hero\n",
+        );
+}
+
+#[test]
+fn assembly_classes_filter_and_dll_suffix() {
+    let (_tmp, data_dir) = game_with_assembly();
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["assembly", "Assembly-CSharp.dll", "classes", "game."])
+        .assert()
+        .success()
+        .stdout("class      Game.Hero\nstruct     Game.State\ninterface  Game.IDamageable\n");
+}
+
+#[test]
+fn assembly_class_ambiguous_name_lists_candidates() {
+    let (_tmp, data_dir) = game_with_assembly();
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["assembly", "Assembly-CSharp", "class", "Hero", "decompile"])
+        .assert()
+        .failure()
+        .stderr("Error: class 'Hero' is ambiguous in Assembly-CSharp: Game.Hero, Other.Hero\n");
+}
+
+#[test]
+fn assembly_class_missing_name_suggests_similar() {
+    let (_tmp, data_dir) = game_with_assembly();
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args([
+            "assembly",
+            "Assembly-CSharp",
+            "class",
+            "Damage",
+            "decompile",
+        ])
+        .assert()
+        .failure()
+        .stderr("Error: no class 'Damage' in Assembly-CSharp; similar: Game.IDamageable\n");
+}
+
+#[test]
+fn assembly_missing_name_errors() {
+    let (_tmp, data_dir) = game_with_assembly();
+    let managed = data_dir.join("Managed");
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["assembly", "Assembly", "classes"])
+        .assert()
+        .failure()
+        .stderr(format!(
+            "Error: no assembly 'Assembly' in {}; similar: Assembly-CSharp\n",
+            managed.display()
+        ));
+}
+
+#[test]
+fn assemblies_without_managed_dir_errors() {
+    let (_tmp, path, _) = game_with_file("level0", &["Player"]);
+    let data_dir = path.parent().unwrap();
+    rabex()
+        .arg("--game-dir")
+        .arg(data_dir)
+        .arg("assemblies")
+        .assert()
+        .failure()
+        .stderr(format!(
+            "Error: {} has no Managed directory (IL2CPP games have no managed assemblies)\n",
+            data_dir.display()
+        ));
+}
+
+#[test]
+#[ignore = "needs ilspycmd on PATH"]
+fn assembly_class_decompile_by_unique_name() {
+    let (_tmp, data_dir) = game_with_assembly();
+    let assert = rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args([
+            "--format",
+            "json",
+            "assembly",
+            "Assembly-CSharp",
+            "class",
+            "State",
+            "decompile",
+        ])
+        .assert()
+        .success();
+    let json = stdout_json(&assert);
+    assert_eq!(json["assembly"], "Assembly-CSharp");
+    assert_eq!(json["class"], "Game.State");
+    let source = json["source"].as_str().unwrap();
+    assert!(source.contains("struct State"), "{source}");
+}
+
+#[test]
+#[ignore = "needs ilspycmd on PATH"]
+fn script_decompile_resolves_class_from_monoscript() {
+    let (_tmp, data_dir) = game_with_assembly();
+    std::fs::write(data_dir.join("level0"), fixtures::scripts_file(&["Helper"])).unwrap();
+    rabex()
+        .arg("--game-dir")
+        .arg(&data_dir)
+        .args(["script", "Helper", "decompile"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("class Helper"));
+}
+
 #[test]
 fn tpk_class_abstract_fails() {
     rabex()

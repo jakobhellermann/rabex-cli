@@ -477,6 +477,52 @@ pub fn script_names() -> Result<Vec<CompletionCandidate>> {
         .collect())
 }
 
+/// Candidates for an `assembly <name>`: the game's managed assemblies.
+pub fn assembly_names() -> Result<Vec<CompletionCandidate>> {
+    let Some(env) = current_game_env()? else {
+        return Ok(Vec::new());
+    };
+    Ok(crate::commands::assembly::assembly_names(&env)?
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect())
+}
+
+/// Candidates for an `assembly <name> class <class>`: the assembly's types by full name, and by
+/// their bare name where that's unique.
+pub fn class_names() -> Result<Vec<CompletionCandidate>> {
+    let matches = current_matches()?;
+    let Some(env) = ctx::game_env(&game_args(&matches))? else {
+        return Ok(Vec::new());
+    };
+    let Some(("assembly", assembly_match)) = matches.subcommand() else {
+        return Ok(Vec::new());
+    };
+    let Some(name) = assembly_match.get_one::<String>("name") else {
+        return Ok(Vec::new());
+    };
+    let path = crate::commands::assembly::resolve_assembly(&env, name)?;
+    let types = crate::commands::assembly::types(&path)?;
+
+    let mut bare_counts = std::collections::HashMap::<&str, usize>::new();
+    for ty in &types {
+        *bare_counts.entry(bare_name(&ty.name)).or_default() += 1;
+    }
+    let mut candidates = Vec::new();
+    for ty in &types {
+        let bare = bare_name(&ty.name);
+        if bare != ty.name && bare_counts[bare] == 1 {
+            candidates.push(CompletionCandidate::new(bare).help(Some(ty.name.clone().into())));
+        }
+        candidates.push(CompletionCandidate::new(&ty.name).help(Some(ty.kind.into())));
+    }
+    Ok(candidates)
+}
+
+fn bare_name(full_name: &str) -> &str {
+    full_name.rsplit(['.', '+']).next().unwrap()
+}
+
 /// Candidates for a `scene <name>`: built-in + addressables scene names, with
 /// their source (`levelN` / bundle) as help text.
 pub fn scene_names() -> Result<Vec<CompletionCandidate>> {

@@ -95,6 +95,12 @@ pub enum Command {
     /// Locate a MonoScript by name across the whole game, then run the shared object verbs on it.
     Script(ScriptArgs),
 
+    /// List the game's managed assemblies (`Managed/*.dll`).
+    Assemblies(AssembliesArgs),
+
+    /// Inspect one managed assembly by name.
+    Assembly(AssemblyArgs),
+
     /// Look up Unity engine class type trees in the embedded TPK (no game needed).
     Tpk(TpkArgs),
 }
@@ -274,7 +280,70 @@ pub struct ScriptArgs {
     #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::script_names().unwrap_or_default()))]
     pub name: String,
     #[command(subcommand)]
-    pub verb: Option<ObjectVerb>,
+    pub verb: Option<ScriptVerb>,
+}
+
+/// The object verbs of the MonoScript, and the class verbs of its class.
+#[derive(Subcommand)]
+pub enum ScriptVerb {
+    /// Object summary (class, name).
+    Info,
+    /// Dump the object as JSON (PPtrs annotated with `$ref`).
+    Cat(CatArgs),
+    /// Find every object that references this one (local or from another file).
+    References(ReferencesArgs),
+    /// Decompile the script's class to C# with `ilspycmd`.
+    Decompile,
+}
+
+#[derive(Args)]
+pub struct AssembliesArgs {
+    #[command(subcommand)]
+    pub verb: Option<AssembliesVerb>,
+}
+#[derive(Subcommand)]
+pub enum AssembliesVerb {
+    /// List the assemblies with their versions (the default).
+    List,
+}
+
+#[derive(Args)]
+pub struct AssemblyArgs {
+    /// Assembly name, with or without `.dll` (e.g. `Assembly-CSharp`).
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::assembly_names().unwrap_or_default()))]
+    pub name: String,
+    #[command(subcommand)]
+    pub verb: Option<AssemblyVerb>,
+}
+
+#[derive(Subcommand)]
+pub enum AssemblyVerb {
+    /// List the types the assembly defines (the default).
+    Classes(ClassesArgs),
+    /// Select one type, then run a class verb on it.
+    Class(ClassArgs),
+}
+
+#[derive(Args, Default)]
+pub struct ClassesArgs {
+    /// Only types whose full name contains this (case-insensitive).
+    #[arg(value_name = "FILTER")]
+    pub filter: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ClassArgs {
+    /// Full type name (`Namespace.Class`, nested `Outer+Nested`), or a unique name it ends with.
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(|| crate::complete::class_names().unwrap_or_default()))]
+    pub name: String,
+    #[command(subcommand)]
+    pub verb: Option<ClassVerb>,
+}
+
+#[derive(Subcommand)]
+pub enum ClassVerb {
+    /// Decompile the class to C# with `ilspycmd` (the default).
+    Decompile,
 }
 
 #[derive(Args)]

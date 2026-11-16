@@ -95,6 +95,18 @@ Especially useful for finding instances of specific MonoBehaviours.
 ```sh
 rabex script PlayMakerFSM references
 rabex script tk2dButton cat --jq '.m_AssemblyName'
+rabex script PlayMakerUnity2DProxy decompile
+```
+
+## Assemblies
+
+List types of the managed assemblies.
+Can decompile to source code, if `ilspycmd` is on the `PATH`.
+
+```sh
+rabex assemblies
+rabex assembly Assembly-CSharp classes Trigger2d
+rabex assembly Assembly-CSharp class Trigger2dEvent decompile
 ```
 
 ## Autocomplete

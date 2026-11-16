@@ -1004,6 +1004,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
+ "dotnetdll",
  "predicates",
  "rabex",
  "rabex-env",
