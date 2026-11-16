@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
-use rabex_env::addressables::catalog::{ResourceLocation, resource_providers};
+use rabex_env::addressables::catalog::{AddressablesCatalog, ResourceLocation, resource_providers};
 use rabex_env::env::Data;
 use rabex_env::handle::SerializedFileHandle;
 use rabex_env::rabex::files::bundlefile::{BundleFileReader, BundleSignature, ExtractionConfig};
@@ -258,14 +258,15 @@ pub fn open_scene<'a>(
 /// itself if it is an `AssetBundle`, else its `AssetBundle` dependency.
 pub fn location_bundle(
     addressables: &AddressablesData,
+    catalog: &AddressablesCatalog,
     loc: &ResourceLocation,
     build_folder: &Path,
 ) -> Option<PathBuf> {
     let internal_id = if loc.provider_id.as_str() == resource_providers::ASSET_BUNDLE {
         &loc.internal_id
     } else {
-        &loc.dependencies
-            .iter()
+        &catalog
+            .dependencies(loc)
             .find(|dep| dep.provider_id.as_str() == resource_providers::ASSET_BUNDLE)?
             .internal_id
     };
@@ -294,10 +295,12 @@ pub fn open_addressable<'a>(
     let mut bundled = Vec::new();
     let mut other_providers = Vec::new();
     for catalog in addressables.catalogs(&env.game_files)? {
-        if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
+        if let Some(locs) = catalog.locations_of_key(key) {
             for loc in locs {
                 if loc.provider_id.as_str() == resource_providers::BUNDLED_ASSET {
-                    if let Some(bundle) = location_bundle(addressables, loc, &build_folder) {
+                    if let Some(bundle) =
+                        location_bundle(addressables, &catalog, loc, &build_folder)
+                    {
                         let container_key = addressables.evaluate_string(&loc.internal_id);
                         bundled.push((bundle, container_key));
                     }
@@ -568,17 +571,17 @@ pub fn addressable_keys(
     let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if let Some(addressables) = env.addressables()? {
         for catalog in addressables.catalogs(&env.game_files)? {
-            for (key, locations) in &catalog.resources {
+            for (key, indices) in &catalog.resources {
                 if !include_asset_bundles
-                    && !locations.is_empty()
-                    && locations
-                        .iter()
+                    && !indices.is_empty()
+                    && catalog
+                        .locations_at(indices)
                         .all(|loc| loc.provider_id.as_str() == resource_providers::ASSET_BUNDLE)
                 {
                     continue;
                 }
-                let types = keys.entry(key.to_string()).or_default();
-                for loc in locations {
+                let types = keys.entry(key.as_str().to_owned()).or_default();
+                for loc in catalog.locations_at(indices) {
                     types.insert(loc.type_.class_name().to_owned());
                 }
             }
@@ -621,9 +624,8 @@ pub fn scenes<R: EnvResolver, P: TypeTreeProvider>(env: &Environment<R, P>) -> R
                     continue;
                 }
                 // The scene's bundle is its ASSET_BUNDLE dependency.
-                if let Some(dep) = loc
-                    .dependencies
-                    .iter()
+                if let Some(dep) = catalog
+                    .dependencies(loc)
                     .find(|dep| dep.provider_id.as_str() == resource_providers::ASSET_BUNDLE)
                 {
                     let path = addressables.evaluate_string(&dep.internal_id);

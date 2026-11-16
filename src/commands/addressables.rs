@@ -5,7 +5,6 @@ use std::io::Write;
 
 use anyhow::{Context as _, Result};
 use rabex_env::Environment;
-use rabex_env::addressables::catalog::ResourceLocation;
 use serde::Serialize;
 
 use crate::cli::Format;
@@ -51,30 +50,29 @@ pub fn addressable_stats(env: &Environment, format: Format) -> Result<()> {
     let mut catalogs = 0usize;
     let mut keys = 0usize;
     let mut refs = 0usize;
-    let mut seen = std::collections::HashSet::new();
+    let mut locations = 0usize;
     let mut by_provider: std::collections::HashMap<String, usize> = Default::default();
     let mut by_type: std::collections::HashMap<String, usize> = Default::default();
 
     for catalog in addressables.catalogs(&env.game_files)? {
         catalogs += 1;
         keys += catalog.resources.len();
+        refs += catalog.resources.values().map(Vec::len).sum::<usize>();
+        locations += catalog.locations.len();
         for loc in catalog.locations() {
-            refs += 1;
-            if seen.insert(loc as *const ResourceLocation) {
-                *by_provider
-                    .entry(loc.provider_name().to_owned())
-                    .or_default() += 1;
-                *by_type
-                    .entry(loc.type_.class_name().to_owned())
-                    .or_default() += 1;
-            }
+            *by_provider
+                .entry(loc.provider_name().to_owned())
+                .or_default() += 1;
+            *by_type
+                .entry(loc.type_.class_name().to_owned())
+                .or_default() += 1;
         }
     }
 
     let stats = AddressableStats {
         catalogs,
         keys,
-        locations: seen.len(),
+        locations,
         location_refs: refs,
         bundles: addressables.bundle_paths().count(),
         by_provider: sorted_breakdown(by_provider),

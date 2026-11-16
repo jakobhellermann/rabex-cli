@@ -126,28 +126,34 @@ pub fn addressable_info(
 
     // The catalog maps a key to a list of locations; that — not the per-location
     // `primary_key`, which isn't unique — is what the key resolves to.
-    let mut raw = Vec::new();
-    for catalog in addressables.catalogs(&env.game_files)? {
-        if let Some((_, locs)) = catalog.resources.iter().find(|(k, _)| k.as_str() == key) {
-            raw.extend(locs.iter().cloned());
-        }
-    }
+    let catalogs = addressables.catalogs(&env.game_files)?;
+    let raw: Vec<_> = catalogs
+        .iter()
+        .filter_map(|catalog| {
+            Some(
+                catalog
+                    .locations_of_key(key)?
+                    .map(move |loc| (catalog, loc)),
+            )
+        })
+        .flatten()
+        .collect();
     if raw.is_empty() {
         bail!("no addressable with key '{key}'");
     }
 
     let locations = raw
         .iter()
-        .map(|loc| AddressableLocation {
+        .map(|&(catalog, loc)| AddressableLocation {
             type_: loc.type_.class_name().to_owned(),
             primary_key: loc.primary_key.to_string(),
             internal_id: addressables.evaluate_string(&loc.internal_id),
             provider: loc.provider_name().to_owned(),
-            bundle: ctx::location_bundle(addressables, loc, &build_folder),
-            dependencies: loc.dependencies.len(),
+            bundle: ctx::location_bundle(addressables, catalog, loc, &build_folder),
+            dependencies: catalog.dependencies(loc).count(),
             dependency_labels: if list_deps {
-                loc.dependencies
-                    .iter()
+                catalog
+                    .dependencies(loc)
                     .map(|dep| dependency_label(addressables, dep, &build_folder))
                     .collect()
             } else {
