@@ -70,7 +70,7 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
         }
         Command::File(args) => {
             let (env, relative) = ctx::open_file(game, &args.path)?;
-            let handle = env.load_serialized(&relative)?;
+            let handle = ctx::load_file(&env, &relative, &args.path)?;
             commands::file::run_verb(
                 FileLocation::File(args.path.to_str().unwrap().to_owned()),
                 &handle,

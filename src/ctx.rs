@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use rabex_env::Environment;
 use rabex_env::addressables::AddressablesData;
 use rabex_env::addressables::catalog::{ResourceLocation, resource_providers};
 use rabex_env::env::Data;
 use rabex_env::handle::SerializedFileHandle;
-use rabex_env::rabex::files::bundlefile::{BundleFileReader, ExtractionConfig};
+use rabex_env::rabex::files::bundlefile::{BundleFileReader, BundleSignature, ExtractionConfig};
 use rabex_env::rabex::files::serializedfile::SerializedFile;
 use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::tpk::TpkTypeTreeBlob;
@@ -102,6 +102,33 @@ pub fn open_file(game: &Context, path: &Path) -> Result<(Environment, PathBuf)> 
         Some(env) => Ok((env, path.to_owned())),
         None => standalone(path),
     }
+}
+
+pub fn load_file<'a>(
+    env: &'a Environment,
+    relative: &Path,
+    display: &Path,
+) -> Result<SerializedFileHandle<'a>> {
+    env.load_serialized(relative).map_err(|error| {
+        let is_bundle = env
+            .game_files
+            .read_path(relative)
+            .is_ok_and(|data| has_bundle_signature(data.as_ref()));
+        match is_bundle {
+            true => anyhow!(
+                "File is an asset bundle, not a serialized file; use `rabex bundle {} file`",
+                display.display()
+            ),
+            false => error,
+        }
+    })
+}
+
+fn has_bundle_signature(data: &[u8]) -> bool {
+    let Some(end) = data.iter().take(20).position(|&b| b == 0) else {
+        return false;
+    };
+    std::str::from_utf8(&data[..end]).is_ok_and(|s| s.parse::<BundleSignature>().is_ok())
 }
 
 /// Open a bundle reader: with a game context the path is an addressables bundle
