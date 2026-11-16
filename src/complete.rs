@@ -520,6 +520,44 @@ pub fn steam_games() -> Vec<CompletionCandidate> {
     inner().unwrap_or_default()
 }
 
+pub fn tpk_classes() -> Vec<CompletionCandidate> {
+    let tpk = TpkTypeTreeBlob::embedded();
+    crate::commands::tpk::classes(&tpk)
+        .into_iter()
+        .map(|(name, class_id, _)| {
+            CompletionCandidate::new(name).help(Some(class_id.0.to_string().into()))
+        })
+        .collect()
+}
+
+/// The versions in which the typed `tpk class <name>` changed, or else in which any class did.
+pub fn tpk_versions() -> Vec<CompletionCandidate> {
+    let tpk = TpkTypeTreeBlob::embedded();
+    let class_name = current_matches().ok().and_then(|matches| {
+        let (_, tpk_matches) = matches.subcommand().filter(|(name, _)| *name == "tpk")?;
+        let (_, class_matches) = tpk_matches
+            .subcommand()
+            .filter(|(name, _)| *name == "class")?;
+        class_matches.get_one::<String>("name").cloned()
+    });
+
+    let mut versions: Vec<_> = crate::commands::tpk::classes(&tpk)
+        .into_iter()
+        .filter(|(name, ..)| {
+            class_name
+                .as_ref()
+                .is_none_or(|c| name.eq_ignore_ascii_case(c))
+        })
+        .flat_map(|(_, _, changes)| changes)
+        .collect();
+    versions.sort_unstable_by(|a, b| b.cmp(a));
+    versions.dedup();
+    versions
+        .into_iter()
+        .map(|version| CompletionCandidate::new(version.to_string()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_jq_ident, value_hint};

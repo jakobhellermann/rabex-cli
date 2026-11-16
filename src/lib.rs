@@ -14,6 +14,7 @@ pub mod commands {
     pub mod files;
     pub mod game;
     pub mod scenes;
+    pub mod tpk;
 }
 
 use anyhow::Result;
@@ -91,5 +92,6 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
             });
             commands::file::run_verb(location, &handle, Some(verb), format)
         }
+        Command::Tpk(args) => commands::tpk::run(args, format),
     }
 }

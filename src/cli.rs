@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, ArgValueCompleter};
+use rabex_env::rabex::UnityVersion;
 
 use crate::component_path::ObjectRef;
 
@@ -85,6 +86,9 @@ pub enum Command {
 
     /// Locate a MonoScript by name across the whole game, then run the shared object verbs on it.
     Script(ScriptArgs),
+
+    /// Look up Unity engine class type trees in the embedded TPK (no game needed).
+    Tpk(TpkArgs),
 }
 
 // -----------------------------------------------------------------------------
@@ -254,6 +258,37 @@ pub struct ScriptArgs {
     pub name: String,
     #[command(subcommand)]
     pub verb: Option<ObjectVerb>,
+}
+
+#[derive(Args)]
+pub struct TpkArgs {
+    /// Unity version to look up; default: the latest one the TPK knows.
+    #[arg(long, global = true, value_name = "VERSION", add = ArgValueCandidates::new(crate::complete::tpk_versions))]
+    pub unity_version: Option<UnityVersion>,
+    #[command(subcommand)]
+    pub verb: TpkVerb,
+}
+
+#[derive(Subcommand)]
+pub enum TpkVerb {
+    /// Print the type tree of an engine class.
+    Class(TpkClassArgs),
+    /// List every class field of the given type.
+    References(TpkReferencesArgs),
+}
+
+#[derive(Args)]
+pub struct TpkClassArgs {
+    /// Class name, case-insensitive.
+    #[arg(value_name = "NAME", add = ArgValueCandidates::new(crate::complete::tpk_classes))]
+    pub name: String,
+}
+
+#[derive(Args)]
+pub struct TpkReferencesArgs {
+    /// Field type name, matched exactly.
+    #[arg(value_name = "TYPE")]
+    pub r#type: String,
 }
 
 // -----------------------------------------------------------------------------

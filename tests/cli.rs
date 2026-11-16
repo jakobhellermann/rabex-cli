@@ -1094,3 +1094,44 @@ fn completion_jq_stays_out_of_real_expressions() {
     );
     assert_eq!(complete_jq(&path, &id, "go"), Vec::<String>::new());
 }
+
+// -----------------------------------------------------------------------------
+// tpk
+// -----------------------------------------------------------------------------
+
+#[test]
+fn tpk_references_lists_fields_of_type() {
+    rabex()
+        .args([
+            "tpk",
+            "references",
+            "StreamedResource",
+            "--unity-version",
+            "6000.0.61f1",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            "2 field(s) of type StreamedResource in 6000.0.61f1\n\
+             \x20 AudioClip  m_Resource\n\
+             \x20 VideoClip  m_ExternalResources\n",
+        );
+}
+
+#[test]
+fn tpk_class_unknown_name_fails() {
+    rabex()
+        .args(["tpk", "class", "Nope"])
+        .assert()
+        .failure()
+        .stderr("Error: the TPK has no class 'Nope'\n");
+}
+
+#[test]
+fn tpk_class_abstract_fails() {
+    rabex()
+        .args(["tpk", "class", "NamedObject"])
+        .assert()
+        .failure()
+        .stderr("Error: NamedObject is abstract and has no type tree of its own\n");
+}
