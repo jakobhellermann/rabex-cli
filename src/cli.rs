@@ -290,6 +290,8 @@ pub enum ScriptVerb {
     Info,
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
     Cat(CatArgs),
+    /// Print the type tree the object is read with (stored in the file, TPK, or generated).
+    Typetree,
     /// Find every object that references this one (local or from another file).
     References(ReferencesArgs),
     /// Decompile the script's class to C# with `ilspycmd`.
@@ -465,6 +467,8 @@ pub enum ObjectVerb {
     Info,
     /// Dump the object as JSON (PPtrs annotated with `$ref`).
     Cat(CatArgs),
+    /// Print the type tree the object is read with (stored in the file, TPK, or generated).
+    Typetree,
     /// Find every object that references this one (local or from another file).
     References(ReferencesArgs),
 }

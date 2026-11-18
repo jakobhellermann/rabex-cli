@@ -78,7 +78,7 @@ pub struct ClassTypeTree {
 }
 
 #[derive(Serialize)]
-struct Node {
+pub struct Node {
     r#type: String,
     name: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -86,7 +86,7 @@ struct Node {
 }
 
 impl Node {
-    fn new(node: &TypeTreeNode) -> Node {
+    pub fn new(node: &TypeTreeNode) -> Node {
         Node {
             r#type: node.m_Type.clone(),
             name: node.m_Name.clone(),
@@ -110,7 +110,7 @@ impl Render for ClassTypeTree {
     }
 }
 
-fn render_node(node: &Node, depth: usize, out: &mut dyn Write) -> Result<()> {
+pub fn render_node(node: &Node, depth: usize, out: &mut dyn Write) -> Result<()> {
     writeln!(
         out,
         "{:indent$}{} {}",

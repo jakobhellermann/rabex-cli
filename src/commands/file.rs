@@ -27,6 +27,7 @@ use crate::resolve::{
 mod preloads;
 mod references;
 mod tree;
+mod typetree;
 
 // Re-exported so `tree` / `preloads` keep their canonical `file::<name>` path
 // (used by the dispatcher below and the integration tests).
@@ -87,6 +88,9 @@ pub fn run_verb<R: EnvResolver + 'static, P: TypeTreeProvider + Sync + 'static>(
                     Some(filter) => object_jq(file, &file_location, path_id, &filter, &mut out),
                     None => emit(&dump_path_id(file, path_id)?, format, &mut out),
                 },
+                ObjectVerb::Typetree => {
+                    emit(&typetree::object_typetree(file, path_id)?, format, &mut out)
+                }
                 ObjectVerb::References(args) => match &args.verb {
                     // `references cat [--jq …]`: load and query every referring object.
                     Some(crate::cli::ReferencesVerb::Cat(cat)) => {

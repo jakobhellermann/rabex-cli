@@ -104,6 +104,7 @@ pub fn run(cli: crate::cli::Cli) -> Result<()> {
             let object_verb = match args.verb.unwrap_or(ScriptVerb::Info) {
                 ScriptVerb::Info => ObjectVerb::Info,
                 ScriptVerb::Cat(args) => ObjectVerb::Cat(args),
+                ScriptVerb::Typetree => ObjectVerb::Typetree,
                 ScriptVerb::References(args) => ObjectVerb::References(args),
                 ScriptVerb::Decompile => {
                     let script = handle
