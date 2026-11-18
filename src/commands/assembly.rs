@@ -10,6 +10,7 @@ use dotnetdll::resolved::types::{Kind, TypeDefinition, TypeSource};
 use rabex_env::Environment;
 use rayon::prelude::*;
 use serde::Serialize;
+use syntect::util::LinesWithEndings;
 
 use crate::cli::Format;
 use crate::output::{Render, emit, style};
@@ -263,7 +264,13 @@ pub struct Decompiled {
 
 impl Render for Decompiled {
     fn render(&self, out: &mut dyn std::io::Write) -> Result<()> {
-        out.write_all(self.source.as_bytes())?;
+        let source: String = LinesWithEndings::from(&self.source)
+            .map(|line| {
+                let body = line.trim_start_matches('\t');
+                "    ".repeat(line.len() - body.len()) + body
+            })
+            .collect();
+        out.write_all(style::code(&source, "cs")?.as_bytes())?;
         Ok(())
     }
 }

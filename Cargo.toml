@@ -31,6 +31,8 @@ steamlocate = "2.1"
 rayon = "1.12"
 rustc-hash = "2.1"
 unicode-width = "0.2.2"
+syntect = { version = "5.3", default-features = false }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"

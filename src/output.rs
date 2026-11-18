@@ -30,6 +30,14 @@ fn color_enabled() -> bool {
 /// `--color never` output stays plain. Pad to a column width *before* styling, as
 /// the ANSI escapes would otherwise be counted by `{:<width$}`.
 pub mod style {
+    use std::fmt::Write;
+
+    use anyhow::{Context, Result};
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::{Color, FontStyle};
+    use syntect::util::LinesWithEndings;
+    use two_face::theme::EmbeddedThemeName;
+
     use super::color_enabled;
 
     fn paint(code: &str, s: &str) -> String {
@@ -55,6 +63,52 @@ pub mod style {
     /// Object / GameObject / scene names and addressable keys.
     pub fn name(s: &str) -> String {
         paint("32", s)
+    }
+
+    /// Syntax-highlight `source`, a file with the given `extension`, in the terminal's palette.
+    pub fn code(source: &str, extension: &str) -> Result<String> {
+        if !color_enabled() {
+            return Ok(source.to_owned());
+        }
+        let syntaxes = two_face::syntax::extra_newlines();
+        let syntax = syntaxes
+            .find_syntax_by_extension(extension)
+            .with_context(|| format!("no syntax for .{extension}"))?;
+        let themes = two_face::theme::extra();
+        let mut highlighter = HighlightLines::new(syntax, themes.get(EmbeddedThemeName::Ansi));
+
+        let mut out = String::with_capacity(source.len() * 2);
+        for line in LinesWithEndings::from(source) {
+            for (style, text) in highlighter.highlight_line(line, &syntaxes)? {
+                let mut codes = Vec::new();
+                if style.font_style.contains(FontStyle::BOLD) {
+                    codes.push("1".to_owned());
+                }
+                if style.font_style.contains(FontStyle::ITALIC) {
+                    codes.push("3".to_owned());
+                }
+                if style.font_style.contains(FontStyle::UNDERLINE) {
+                    codes.push("4".to_owned());
+                }
+                codes.extend(ansi_foreground(style.foreground));
+                if codes.is_empty() {
+                    out.push_str(text);
+                } else {
+                    write!(out, "\x1b[{}m{text}\x1b[0m", codes.join(";"))?;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// bat's theme encoding: alpha 0 holds a palette index in `r`, alpha 1 is the default color.
+    fn ansi_foreground(color: Color) -> Option<String> {
+        match color.a {
+            0 if color.r < 8 => Some(format!("{}", 30 + color.r)),
+            0 => Some(format!("38;5;{}", color.r)),
+            1 => None,
+            _ => Some(format!("38;2;{};{};{}", color.r, color.g, color.b)),
+        }
     }
 }
 
